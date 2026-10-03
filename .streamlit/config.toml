@@ -1,0 +1,6 @@
+# Настройки чата для показа: без служебного меню разработчика Streamlit
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

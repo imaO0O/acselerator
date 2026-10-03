@@ -16,6 +16,7 @@ import pymupdf
 import yaml
 from docx import Document as DocxDocument
 
+from .config import settings
 from .text import join_hyphenated, normalize
 
 CLAUSE_RE = re.compile(r"^(?:п\.\s*)?([1-9]\d{0,2}(?:\.\d{1,3}){0,4})(\.?)\s+(?=[А-ЯЁA-Z«\"(])")
@@ -63,12 +64,31 @@ class _Unit:
 
 # ---------- чтение файлов ----------
 
-def _pdf_pages(path: Path) -> list[tuple[int, list[str]]]:
+def ocr_available() -> bool:
+    return (settings.tessdata_dir / "rus.traineddata").exists()
+
+
+def _page_text(page, stats: dict) -> str:
+    """Текстовый слой страницы, а для скана — распознанный текст (Tesseract встроен в PyMuPDF,
+    языки — tools/tessdata, скачиваются scripts/setup.py --ocr)."""
+    # естественный порядок блоков: при sort=True колонки двухколоночной вёрстки перемешиваются
+    text = page.get_text("text")
+    if len(text.strip()) >= 20 or not page.get_images():
+        return text
+    if not ocr_available():
+        stats["scanned_pages"] = stats.get("scanned_pages", 0) + 1
+        return text
+    tp = page.get_textpage_ocr(language="rus+eng", dpi=300, full=True, tessdata=str(settings.tessdata_dir))
+    stats["ocr_pages"] = stats.get("ocr_pages", 0) + 1
+    return page.get_text("text", textpage=tp)
+
+
+def _pdf_pages(path: Path, stats: dict | None = None) -> list[tuple[int, list[str]]]:
+    stats = {} if stats is None else stats
     doc = pymupdf.open(path)
     pages = []
     for i, page in enumerate(doc):
-        # естественный порядок блоков: при sort=True колонки двухколоночной вёрстки перемешиваются
-        raw = normalize(page.get_text("text"))
+        raw = normalize(_page_text(page, stats))
         lines = [l.strip() for l in raw.split("\n")]
         pages.append((i + 1, [l for l in lines if l]))
     # повторяющиеся колонтитулы и номера страниц
@@ -224,25 +244,45 @@ def _chunks(units: list[_Unit], meta: dict) -> list[Chunk]:
 
 # ---------- каталог документов ----------
 
+ARCHIVE = "archive"   # группа доступа отменённых редакций: её нет ни у одной роли
+
+
+def is_cancelled(info: dict) -> bool:
+    """Статус в каталоге: «действует» (по умолчанию) или «отменён» (с полем replaced_by)."""
+    return str(info.get("status", "действует")).lower().startswith("отмен")
+
+
 def load_catalog(raw_dir: Path) -> dict[str, dict]:
-    """Названия и группы доступа из data/sources.yaml и data/raw/*/catalog.yaml."""
+    """Названия, группы доступа и статусы (действует / отменён) из data/sources.yaml и data/raw/*/catalog.yaml."""
     catalog = {}
     for path in [raw_dir.parent / "sources.yaml", *raw_dir.glob("*/catalog.yaml")]:
         if path.exists():
             for d in yaml.safe_load(path.read_text(encoding="utf-8"))["documents"]:
                 catalog[d["id"]] = d
+    # новая редакция, загруженная с пометкой «заменяет X», отменяет X
+    for d in list(catalog.values()):
+        old = catalog.get(d.get("replaces"))
+        if old is not None and not is_cancelled(d):
+            old.update(status="отменён", replaced_by=d["id"])
     return catalog
 
 
-def parse_document(path: Path, catalog: dict) -> list[Chunk]:
+def access_of(info: dict) -> str:
+    return ARCHIVE if is_cancelled(info) else info.get("access", "all")
+
+
+def parse_document(path: Path, catalog: dict, stats: dict | None = None) -> list[Chunk]:
+    """stats (необязательно) получает счётчики: ocr_pages — распознано страниц-сканов,
+    scanned_pages — сканы, которые нечем распознать."""
     info = catalog.get(path.stem, {})
     meta = {
         "id": path.stem,
         "title": info.get("title", path.stem),
         "kind": info.get("kind", "Документ"),
-        "access": info.get("access", "all"),
+        # отменённая редакция остаётся в индексе для истории, но не доступна ни одной роли
+        "access": access_of(info),
     }
-    pages = _pdf_pages(path) if path.suffix.lower() == ".pdf" else _docx_pages(path)
+    pages = _pdf_pages(path, stats) if path.suffix.lower() == ".pdf" else _docx_pages(path)
     return _chunks(_units(pages), meta)
 
 

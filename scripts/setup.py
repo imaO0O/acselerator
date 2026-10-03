@@ -2,6 +2,7 @@
 
     python scripts/setup.py          # компьютер с видеокартой NVIDIA (CUDA 13)
     python scripts/setup.py --cpu    # ноутбук без видеокарты NVIDIA
+    python scripts/setup.py --ocr    # только языки распознавания сканов (около 6 МБ)
 
 Файлы качаются в несколько потоков (scripts/pget.py) с докачкой: если
 загрузка прервалась, просто запустите команду ещё раз.
@@ -29,6 +30,11 @@ MODEL_FILES = {
         "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q8_0.gguf",
 }
 
+# Языки распознавания сканов: движок Tesseract встроен в PyMuPDF, нужны только файлы языков
+# (официальный репозиторий tesseract-ocr, лицензия Apache 2.0).
+TESSDATA_URL = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+TESSDATA_FILES = ["rus.traineddata", "eng.traineddata"]
+
 
 def fetch(url: str, target: Path) -> None:
     if target.exists() and not Path(str(target) + ".parts").exists():
@@ -41,7 +47,13 @@ def fetch(url: str, target: Path) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cpu", action="store_true", help="сборка llama.cpp для процессора")
+    ap.add_argument("--ocr", action="store_true", help="скачать только языки распознавания сканов")
     args = ap.parse_args()
+
+    for name in TESSDATA_FILES:
+        fetch(f"{TESSDATA_URL}/{name}", TOOLS / "tessdata" / name)
+    if args.ocr:
+        return
 
     archives = ([f"llama-{LLAMA_BUILD}-bin-win-cpu-x64.zip"] if args.cpu else
                 [f"llama-{LLAMA_BUILD}-bin-win-cuda-13.4-x64.zip", "cudart-llama-bin-win-cuda-13.4-x64.zip"])

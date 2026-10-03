@@ -1,0 +1,14 @@
+# Учётные записи чата: только хэши паролей. Создаётся scripts/make_users.py
+users:
+- login: inzhener
+  name: Инженер производства (демо)
+  role: Инженер производства
+  password_hash: pbkdf2_sha256$200000$78ff1b051886e651d6487ecf1c513df1$c325f3f74e32d6309dcd1fdf204e378db9ba7958823e4b59ac79e2b1957bec05
+- login: metrolog
+  name: Метролог (демо)
+  role: Метролог
+  password_hash: pbkdf2_sha256$200000$e1e2f8d082bab80292e7858159357a40$5f92dc03f380fde2830617cacfaeb795b2abc5c4a5d0371d435df3a7a9fa8caf
+- login: admin
+  name: Администратор (демо)
+  role: Администратор
+  password_hash: pbkdf2_sha256$200000$18dad75ba101a668e5469ae618ee7a70$abb96ee40f79655158896295d16352ce4afc354fd1fec42e2adfe8780474bd64

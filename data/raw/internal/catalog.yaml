@@ -9,6 +9,13 @@ documents:
     (ДЕМО)
   kind: Внутренний регламент (демо)
   access: all
+- id: STP-DP-02-2024_otkaz_oborudovaniya
+  title: СТП ДП-02-2024 «Действия персонала при отказе технологического оборудования»
+    (ДЕМО)
+  kind: Внутренний регламент (демо)
+  access: all
+  status: отменён
+  replaced_by: STP-DP-02_otkaz_oborudovaniya
 - id: RI-DP-03_khranenie_eri
   title: РИ ДП-03-2026 «Хранение и выдача электрорадиоизделий. Защита от электростатических
     разрядов» (ДЕМО)

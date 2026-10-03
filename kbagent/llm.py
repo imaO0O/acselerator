@@ -36,6 +36,9 @@ def chat(messages: list[dict], max_tokens: int | None = None, temperature: float
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens or settings.max_answer_tokens,
+        # повторное использование кэша подсказок в llama.cpp меняет вычисления на последних знаках,
+        # и при «жадной» генерации ответ на тот же вопрос может отличаться; для воспроизводимости — без кэша
+        "cache_prompt": not settings.deterministic,
     })
     text = data["choices"][0]["message"].get("content") or ""
     timings = data.get("timings", {})
@@ -48,12 +51,14 @@ def chat(messages: list[dict], max_tokens: int | None = None, temperature: float
     return text.strip(), stats
 
 
-def embed(texts: list[str], batch: int = 32) -> np.ndarray:
-    """Нормированные векторы bge-m3."""
+def embed(texts: list[str], batch: int = 32, progress=None) -> np.ndarray:
+    """Нормированные векторы bge-m3. progress(готово, всего) вызывается после каждой пачки."""
     out = []
     for i in range(0, len(texts), batch):
         data = _post(f"{settings.embed_url}/embeddings", {"input": texts[i:i + batch], "model": "bge-m3"})
         out.extend(d["embedding"] for d in sorted(data["data"], key=lambda d: d["index"]))
+        if progress:
+            progress(len(out), len(texts))
     vectors = np.asarray(out, dtype=np.float32)
     return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
 

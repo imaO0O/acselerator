@@ -9,6 +9,9 @@
    переранжировщика), модель отдельно проверяет, что ответ относится к тому же
    предмету: гарантия на прибор — не гарантия на ремонт, журнал нарядов — не
    журнал входного контроля.
+
+Плюс проверка полноты: в вопросах о действиях и правилах запреты из процитированных
+пунктов, которые модель пропустила, дописываются в ответ дословно.
 """
 import re
 from dataclasses import dataclass, field
@@ -16,6 +19,7 @@ from dataclasses import dataclass, field
 from . import llm
 from .config import settings
 from .retriever import Hit, Retrieval
+from .text import tokenize
 
 NO_DATA = "НЕТ_ДАННЫХ"
 
@@ -26,8 +30,10 @@ SYSTEM_PROMPT = f"""Ты — помощник сотрудников произ�
 2. Каждое утверждение подкрепляй ссылкой на номер фрагмента в квадратных скобках, например [2]. Ответ без ссылок недопустим.
 3. Учитывай, что в вопросе и в документе одно и то же может называться по-разному: прибор — средство измерений (СИ), комплектующие — ЭРИ, неисправность — отказ. Ответ может складываться из нескольких фрагментов.
 4. Не используй собственные знания и ничего не додумывай. Числа, сроки, телефоны, номера форм и названия переписывай точно как во фрагментах.
-5. Если ни один фрагмент не позволяет ответить на вопрос, ответь ровно одним словом: {NO_DATA}
-6. Отвечай кратко, на русском языке. Последовательность действий оформляй нумерованным списком.
+5. Если спрашивают, что делать, каков порядок или какие требования, — перечисли все действия, требования и запреты из подходящих пунктов, ничего не пропуская. Запреты («запрещается», «не допускается») приводи обязательно.
+6. Если в вопросе есть утверждение, которое противоречит фрагментам, начни ответ со слова «Нет» и приведи, как установлено в документе, со ссылкой.
+7. Если ни один фрагмент не позволяет ответить на вопрос, ответь ровно одним словом: {NO_DATA}
+8. Отвечай кратко, на русском языке. Последовательность действий оформляй нумерованным списком. Не добавляй строк «Основание:» или «Источник:» — ссылок [n] достаточно.
 
 Пример формата (вопрос не из этих документов):
 Вопрос: В какой срок подаётся заявка на пропуск для посетителя?
@@ -50,7 +56,7 @@ class Answer:
 
 def source_label(hit: Hit) -> str:
     c = hit.chunk
-    parts = [c.doc_title]
+    parts = [c.doc_title + (" (загружен пользователем, не утверждён)" if c.doc_kind == "Загруженный документ" else "")]
     if c.clause:
         parts.append(f"п. {c.clause}")
     if c.page_start:
@@ -97,6 +103,59 @@ def _clean_refs(text: str, valid: list[int]) -> str:
     return REF_RE.sub(keep, text)
 
 
+SERVICE_LINE_RE = re.compile(r"^\s*[-*]?\s*(?:основани[ея]|источник[иа]?|ссылк[аи])\s*:?\s*(?:\[[\d,\s–-]+\]\s*[.;,]?\s*)+$",
+                             re.I | re.M)
+
+
+def _strip_service_lines(text: str) -> str:
+    """Убирает служебные строки вроде «Основание: [4].» — ссылки уже стоят в тексте."""
+    text = re.sub(r"\]\.\s*\[", "] [", SERVICE_LINE_RE.sub("", text))   # «… [2]. [1].» → «… [2] [1].»
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+ACTION_Q_RE = re.compile(r"что делать|как (?:действовать|поступить|быть)|порядок|какие (?:требования|правила)|"
+                         r"можно ли|разрешается|допускается|что нужно|что необходимо|обязан", re.I)
+PROHIBIT_RE = re.compile(r"запрещ|не допускается|не разрешается|недопустим", re.I)
+SENTENCE_RE = re.compile(r"(?<=[.!?»])\s+(?=(?:\d{1,3}(?:\.\d{1,3})*\.?\s+)?[А-ЯЁA-Z«])")
+
+
+def _add_prohibitions(question: str, text: str, hits: list[Hit], cited: list[int]) -> str:
+    """Запреты из процитированных пунктов показываются всегда. Небольшая модель иногда их
+    пропускает (искрение: «запрещается самостоятельно вскрывать оборудование»), а в вопросах
+    о действиях и правилах это недопустимо. Предложение переносится из документа дословно."""
+    if not ACTION_Q_RE.search(question):
+        return text
+    asked, have, extra = set(tokenize(question)), set(tokenize(text)), []
+    for n in cited:
+        for sentence in SENTENCE_RE.split(hits[n - 1].chunk.text):
+            words = set(tokenize(sentence))
+            # запрет должен касаться предмета вопроса (иначе из соседнего пункта приходит «браслет не допускается»)
+            # и ещё не быть изложен в ответе
+            if (PROHIBIT_RE.search(sentence) and words & asked
+                    and len(words & have) / len(words) < 0.6):
+                extra.append(f"- {re.sub(r'^\d{1,3}(?:\.\d{1,3})*\.?\s+', '', sentence.strip())} [{n}]")
+                have |= words
+    return text + "\n\nЗапреты из процитированных пунктов:\n" + "\n".join(extra) if extra else text
+
+
+def _renumber(text: str, hits: list[Hit], valid: list[int]) -> tuple[str, list[Hit], list[int]]:
+    """Процитированные фрагменты получают номера 1, 2, 3… в порядке появления в ответе
+    (иначе единственный источник может называться [4] — пользователь ищет, где [1]–[3])."""
+    order = []
+    for group in REF_RE.findall(text):
+        for n in sorted(_ref_numbers(group)):
+            if n in valid and n not in order:
+                order.append(n)
+    new_no = {old: new for new, old in enumerate(order, 1)}
+
+    def sub(m):
+        nums = sorted({new_no[n] for n in _ref_numbers(m.group(1)) if n in new_no})
+        return f"[{', '.join(map(str, nums))}]" if nums else ""
+    text = REF_RE.sub(sub, text)
+    hits = [hits[old - 1] for old in order] + [h for i, h in enumerate(hits, 1) if i not in new_no]
+    return text, hits, list(range(1, len(order) + 1))
+
+
 VERIFY_PROMPT = """Проверь ответ помощника по документам предприятия.
 
 Вопрос сотрудника: {question}
@@ -118,22 +177,40 @@ def verify(question: str, text: str, hits: list[Hit], cited: list[int]) -> bool:
     return "НЕТ" not in out.upper()
 
 
+REFUSAL_RE = re.compile(
+    r"(?:нет|не содерж\w*|отсутству\w*)\s+(?:\w+\s+){0,2}(?:информаци\w*|сведени\w*)|"
+    r"(?:во|в)\s+(?:предоставленных\s+|найденных\s+)?фрагментах\s+(?:нет|не\s)|"
+    r"не указан\w*\s+(?:во|в)\s+(?:фрагмент|документ)", re.I)
+
+
+def _is_refusal(text: str) -> bool:
+    """«Нет. Во фрагментах нет информации… [1, 2]» — это отказ, оформленный как ответ со ссылками."""
+    bare = REF_RE.sub("", text)
+    return bool(REFUSAL_RE.search(bare)) and len(bare) < 300
+
+
 def _too_short(text: str) -> bool:
     bare = re.sub(REF_RE.pattern + r"|[\s.,!]", "", text)
     return NO_DATA not in text and len(bare) < 12
 
 
-def answer_from_documents(question: str, retrieval: Retrieval) -> Answer:
+def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None = None) -> Answer:
+    """facts — ответ по учётной базе для вопросов «запись учёта + правило» (маршрут «оба источника»)."""
     hits = retrieval.hits
     stats = {"best_score": round(retrieval.best_score, 3), "scored_by": retrieval.scored_by}
     if not retrieval.confident:
         return Answer("no_data", "В доступных документах ответа не нашёл.", hits=hits, stats=stats)
 
+    db_block = (f"Состояние записи в учётной базе: {facts.replace('[БД]', '').strip()}\n\n" if facts else "")
+    db_rule = (" Запись из учётной базы будет показана сотруднику отдельно — не пересказывай её и не додумывай "
+               "сведений о ней. Не делай вывода «можно» или «нельзя» о самой записи и не начинай ответ с «Да» "
+               "или «Нет»: приведи требования документов, которые относятся к записи в таком состоянии." if facts else "")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Фрагменты документов:\n\n{_context(hits)}\n\nВопрос: {question}\n\n"
+        {"role": "user", "content": f"Фрагменты документов:\n\n{_context(hits)}\n\n{db_block}Вопрос: {question}\n\n"
                                     "Ответь по существу: приведи конкретные сведения из фрагментов (сроки, числа, "
-                                    f"действия, требования) со ссылками [n]. Если ответа во фрагментах нет — {NO_DATA}."},
+                                    f"действия, требования) со ссылками [n].{db_rule} "
+                                    f"Если ответа во фрагментах нет — {NO_DATA}."},
     ]
     try:
         text, gen = llm.chat(messages)
@@ -165,7 +242,9 @@ def answer_from_documents(question: str, retrieval: Retrieval) -> Answer:
         if NO_DATA in text:
             return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
         valid = _valid_refs(text, len(hits))
-    text = _clean_refs(text, valid)
+    text = _strip_service_lines(_clean_refs(text, valid))
+    if _is_refusal(text):
+        return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
     if not valid or _too_short(text):
         return Answer("unverified", "Не удалось подтвердить ответ ссылкой на документ.", hits=hits, stats=stats)
     if retrieval.best_score < settings.confident_threshold or retrieval.scored_by != "reranker":
@@ -173,4 +252,9 @@ def answer_from_documents(question: str, retrieval: Retrieval) -> Answer:
         if not stats["verified"]:
             return Answer("model_refused", "Найденные фрагменты относятся к другому вопросу — ответа в документах нет.",
                           hits=hits, stats=stats)
-    return Answer("answer", text.strip(), cited=valid, hits=hits, stats=stats)
+    text, hits, cited = _renumber(text, hits, valid)
+    if facts:
+        # вердикт по конкретной записи модель делает ненадёжно — оставляем только требования документов
+        text = re.sub(r"^\s*(?:Да|Нет)[.,!]\s*", "", text)
+    text = _add_prohibitions(question, text, hits, cited)
+    return Answer("answer", text, cited=cited, hits=hits, stats=stats)

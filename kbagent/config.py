@@ -26,7 +26,12 @@ class Settings:
     raw_dir: Path = ROOT / "data" / "raw"
     index_dir: Path = ROOT / "data" / "index"
     db_path: Path = ROOT / "data" / "demo_db" / "uchet.sqlite"
+    db_schema: Path = ROOT / "data" / "demo_db" / "schema.yaml"   # слой понятных названий базы
+    users_path: Path = ROOT / "data" / "users.yaml"                # учётные записи (хэши паролей)
+    tessdata_dir: Path = ROOT / "tools" / "tessdata"               # языки распознавания сканов
     log_dir: Path = ROOT / "logs"
+    # вход по логину и паролю; KB_AUTH=0 — выбор роли из списка (для отладки)
+    auth_required: bool = _env("KB_AUTH", True)
 
     # поиск
     candidates: int = _env("KB_CANDIDATES", 30)      # из каждого поиска (слова и смысл)
@@ -42,6 +47,8 @@ class Settings:
 
     # генерация
     max_answer_tokens: int = _env("KB_MAX_TOKENS", 500)
+    # одинаковый ответ на одинаковый вопрос (без кэша подсказок); на процессоре KB_DETERMINISTIC=0 быстрее
+    deterministic: bool = _env("KB_DETERMINISTIC", True)
     request_timeout: int = _env("KB_TIMEOUT", 300)
 
     # Роли и доступные им группы документов (разграничение прав, демо)

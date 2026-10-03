@@ -79,17 +79,36 @@ class Index:
         self.bm25 = BM25([tokenize(c.search_text) for c in self.chunks])
         self.access = np.array([c.access for c in self.chunks])
 
-    def add_document(self, path: Path, catalog: dict, index_dir: Path) -> list[Chunk]:
-        """Добавляет (или заменяет) один документ без пересборки всего индекса."""
-        new = parse_document(path, catalog)
+    def add_document(self, path: Path, catalog: dict, index_dir: Path, progress=None,
+                     stats: dict | None = None) -> list[Chunk]:
+        """Добавляет (или заменяет) один документ без пересборки всего индекса.
+        progress(готово, всего) — для полосы прогресса; stats — счётчики распознанных сканов."""
+        new = parse_document(path, catalog, stats)
         self.remove_document(path.stem, index_dir, save=False)
         if new:
-            vectors = llm.embed([c.search_text for c in new])
+            vectors = llm.embed([c.search_text for c in new], progress=progress)
             self.chunks = self.chunks + new
             self.vectors = np.vstack([self.vectors, vectors]) if len(self.vectors) else vectors
             self._rebuild_word_index()
         self.save(index_dir)
         return new
+
+    def update_meta(self, doc_id: str, index_dir: Path, **fields) -> int:
+        """Меняет сведения о документе во всех его фрагментах без пересчёта векторов:
+        access (отменённая редакция → archive), doc_kind (утверждён), doc_title."""
+        changed = 0
+        for c in self.chunks:
+            if c.doc_id == doc_id and any(getattr(c, k) != v for k, v in fields.items()):
+                for k, v in fields.items():
+                    setattr(c, k, v)
+                changed += 1
+        if changed:
+            self.access = np.array([c.access for c in self.chunks])
+            self.save(index_dir)
+        return changed
+
+    def doc_ids(self) -> set[str]:
+        return {c.doc_id for c in self.chunks}
 
     def remove_document(self, doc_id: str, index_dir: Path, save: bool = True) -> int:
         keep = [i for i, c in enumerate(self.chunks) if c.doc_id != doc_id]

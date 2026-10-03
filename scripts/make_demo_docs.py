@@ -2,12 +2,14 @@
 
 Документы помечены как демонстрационные и не относятся к реальной организации.
 Два регламента сохраняются в DOCX, два — в PDF, чтобы в корпусе были оба формата
-и у PDF были номера страниц.
+и у PDF были номера страниц. Старая редакция СТП ДП-02 (2024) помечена в каталоге
+как отменённая: она лежит рядом с действующей, но агент на неё не ссылается.
 
     python scripts/make_demo_docs.py
 """
 import html
 import os
+import sys
 from pathlib import Path
 
 import pymupdf
@@ -80,6 +82,24 @@ DOCS = {
             ("h", "7 Особенности действий в ночную смену"),
             ("p", "7.1 В ночную смену решения о действиях при отказе оборудования принимает начальник смены."),
             ("p", "7.2 При отказе категории А или Б в ночную смену начальник смены вызывает дежурного энергетика по телефону 2215. Если связаться с дежурным энергетиком не удалось в течение 10 минут, начальник смены сообщает главному инженеру по мобильному телефону из списка экстренных контактов."),
+        ],
+    },
+    "STP-DP-02-2024_otkaz_oborudovaniya": {
+        "code": "СТП ДП-02-2024",
+        "title": "Действия персонала при отказе технологического оборудования",
+        "date": "15.01.2024",
+        "status": "отменён",
+        "replaced_by": "STP-DP-02_otkaz_oborudovaniya",
+        "body": [
+            ("h", "1 Область применения"),
+            ("p", "1.1 Настоящий стандарт устанавливает порядок действий производственного персонала при отказе технологического оборудования и порядок оформления заявки на ремонт."),
+            ("h", "2 Первоочередные действия при отказе"),
+            ("p", "2.1 При отказе оборудования, создающем угрозу жизни и здоровью, работник обязан отключить оборудование и сообщить о происшествии мастеру участка по внутреннему телефону 2200."),
+            ("p", "2.2 На органах управления неисправного оборудования вывешивается табличка «Не включать»."),
+            ("h", "3 Оформление заявки на ремонт"),
+            ("p", "3.1 Мастер участка в течение 2 часов после отказа оформляет заявку на ремонт в журнале заявок."),
+            ("h", "4 Сроки реагирования ремонтной службы"),
+            ("p", "4.1 Ремонтная служба приступает к работам по аварийным отказам не позднее 30 минут с момента сообщения, по остальным отказам — в течение 2 рабочих дней."),
         ],
     },
     "RI-DP-03_khranenie_eri": {
@@ -162,7 +182,7 @@ def build_pdf(name: str, spec: dict) -> Path:
         f'<p class="c">{esc(COMPANY)}</p>',
         f'<p class="c"><b>{esc(spec["code"])}</b></p>',
         f'<p class="c"><b>{esc(spec["title"].upper())}</b></p>',
-        "<p>Дата введения: 01.03.2026</p>",
+        f"<p>Дата введения: {spec.get('date', '01.03.2026')}</p>",
     ]
     for kind, text in spec["body"]:
         parts.append(f"<h2>{esc(text)}</h2>" if kind == "h" else f'<p class="i">{esc(text)}</p>')
@@ -208,7 +228,9 @@ def build_docx(name: str, spec: dict) -> Path:
         r = p.add_run(text)
         r.bold = bold
         r.font.size = Pt(size)
-    doc.add_paragraph("Дата введения: 01.03.2026")
+    doc.add_paragraph(f"Дата введения: {spec.get('date', '01.03.2026')}")
+    if spec.get("status") == "отменён":
+        doc.add_paragraph("Документ отменён. Действует новая редакция.").runs[0].bold = True
 
     for kind, text in spec["body"]:
         if kind == "h":
@@ -227,16 +249,21 @@ ACCESS = {"RI-DP-04_sredstva_izmerenij": "metrology"}
 
 
 def write_catalog():
-    docs = [{"id": name, "title": f"{spec['code']} «{spec['title']}» (ДЕМО)",
+    docs = []
+    for name, spec in DOCS.items():
+        d = {"id": name, "title": f"{spec['code']} «{spec['title']}» (ДЕМО)",
              "kind": "Внутренний регламент (демо)", "access": ACCESS.get(name, "all")}
-            for name, spec in DOCS.items()]
+        if spec.get("status"):   # отменённая редакция: в индексе есть, в поиске не участвует
+            d.update(status=spec["status"], replaced_by=spec["replaced_by"])
+        docs.append(d)
     text = "# Каталог демо-регламентов (создаётся scripts/make_demo_docs.py)\n"
     text += yaml.safe_dump({"documents": docs}, allow_unicode=True, sort_keys=False)
     (OUT / "catalog.yaml").write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":
-    for name, spec in DOCS.items():
+    # python scripts/make_demo_docs.py [id ...] — только указанные документы (каталог пишется всегда)
+    for name in sys.argv[1:] or DOCS:
         build = build_pdf if name in PDF_DOCS else build_docx
-        print(build(name, spec))
+        print(build(name, DOCS[name]))
     write_catalog()
