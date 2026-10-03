@@ -43,7 +43,7 @@
 
 ![Технологическое ядро](docs/slides/arhitektura.png)
 
-Слайд в шаблоне акселератора: `docs/slides/arhitektura.pptx`. Та же схема в виде диаграммы:
+Слайд в шаблоне акселератора: `docs/slides/arhitektura.pptx`. Черновик всей презентации первого этапа — `docs/slides/prezentatsiya_chernovik.pptx` (13 слайдов, места для заполнения командой выделены оранжевым `[...]`); обе колоды собираются скриптом `python docs/slides/build_slides.py` из шаблона `docs/slides/shablon.pptx`, цифры берутся из словаря `RESULTS` в начале скрипта. Та же схема в виде диаграммы:
 
 ```mermaid
 flowchart LR
