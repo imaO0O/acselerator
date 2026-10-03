@@ -26,7 +26,7 @@ from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
 RESULTS = ROOT / "eval" / "results"
-GROUPS = ["основной", "новый", "перефразировка", "опечатки", "ловушки"]
+GROUPS = ["основной", "новый", "перефразировка", "опечатки", "ловушки", "ловушки-2"]
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
           "ноября", "декабря"]
 
@@ -90,10 +90,10 @@ def ask_with_history(agent: Agent, q: dict, role: str):
     """Предыдущие вопросы диалога задаются по-настоящему — как в чате."""
     context = []
     for prev in q.get("history", []):
-        r = agent.ask(prev, role=role, history=context)
+        r = agent.ask(prev, role=role, history=context, user="eval")
         context.append({"question": r.asked or prev, "text": r.text,
                         "docs": [s["doc_id"] for s in r.sources if s["cited"]]})
-    return agent.ask(q["question"], role=role, history=context or None)
+    return agent.ask(q["question"], role=role, history=context or None, user="eval")   # в журнале — отдельно
 
 
 def main():
@@ -133,7 +133,8 @@ def main():
         elif q["type"] == "clarify":
             row["correct"] = r.status == "clarify"
         else:
-            row["correct"] = r.answered and r.route == "database" and has_facts(evidence, must)
+            row["correct"] = (r.answered and r.route == "database" and has_facts(evidence, must)
+                              and has_none(r.text, q.get("must_exclude", [])))
         rows.append(row)
         mark = "+" if row["correct"] else "-"
         print(f"{mark} {q['id']} [{r.route}/{r.status}, {r.seconds}s] {q['question'][:70]}")

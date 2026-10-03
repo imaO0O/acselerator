@@ -1,6 +1,25 @@
-# Настройки чата для показа: без служебного меню разработчика Streamlit
+# Оформление чата: светлая тема, один акцентный цвет (фиолетовый, как в презентации проекта).
 [client]
 toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+maxUploadSize = 100
+
+[theme]
+base = "light"
+primaryColor = "#6B4FA0"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F2F8"
+textColor = "#1F1A2E"
+linkColor = "#5A3F91"
+borderColor = "#E3DEEC"
+showSidebarBorder = true
+baseRadius = "0.6rem"
+font = "sans-serif"
+
+[theme.sidebar]
+backgroundColor = "#F8F6FB"
+secondaryBackgroundColor = "#EFEBF5"

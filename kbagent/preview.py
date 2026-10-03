@@ -29,11 +29,12 @@ def _phrases(text: str):
             yield phrase
 
 
-def render_page(path: str, page_no: int, fragment: str, zoom: float = 1.6) -> tuple[bytes, int]:
-    """PNG страницы с выделенным фрагментом и число найденных на ней фраз."""
+def render_page(path: str, page_no: int, fragment: str, zoom: float = 1.6, crop: bool = False) -> tuple[bytes, int]:
+    """PNG страницы с выделенным фрагментом и число найденных на ней фраз.
+    crop=True — только полоса страницы вокруг выделения (во всю ширину), крупнее: её видно без прокрутки."""
     doc = pymupdf.open(path)
     page = doc[page_no - 1]
-    found, last_y = 0, None
+    found, last_y, marked = 0, None, []
     for phrase in _phrases(fragment):
         quads = page.search_for(phrase, quads=True)
         if not quads:
@@ -44,8 +45,14 @@ def render_page(path: str, page_no: int, fragment: str, zoom: float = 1.6) -> tu
         parts = [q for q in quads if anchor.rect.y0 - 2 <= q.rect.y0 <= anchor.rect.y0 + 30]
         for q in parts:
             page.add_highlight_annot(q)
+            marked.append(q.rect)
         last_y = max(q.rect.y1 for q in parts)
         found += 1
-    png = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), annots=True).tobytes("png")
+    clip = None
+    if crop and marked:
+        top = max(page.rect.y0, min(r.y0 for r in marked) - 36)
+        bottom = min(page.rect.y1, max(r.y1 for r in marked) + 36)
+        clip = pymupdf.Rect(page.rect.x0, top, page.rect.x1, bottom)
+    png = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), annots=True, clip=clip).tobytes("png")
     doc.close()
     return png, found

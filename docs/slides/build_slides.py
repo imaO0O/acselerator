@@ -25,8 +25,8 @@ HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE / "shablon.pptx"
 
 RESULTS = {
-    "correct": "40 из 40", "refusals": "10 из 10", "db": "8 из 8", "wrong": "0",
-    "questions": "62", "time_gpu": "1,3 с", "time_cpu": "около 7 с",
+    "correct": "47 из 47", "refusals": "11 из 11", "db": "12 из 12", "wrong": "0",
+    "questions": "74", "time_gpu": "1,3 с", "time_cpu": "около 7 с",
 }
 
 PURPLE = RGBColor(0x80, 0x64, 0xA2)

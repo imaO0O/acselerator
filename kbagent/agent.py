@@ -6,11 +6,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+import yaml
+
 from . import demo_db, llm
 from .answer import answer_from_documents, source_label
+from .cards import build_cards, card_chunk, card_text
 from .config import settings
 from .database import answer_from_database
-from .retriever import retrieve
+from .retriever import Hit, Retrieval, retrieve
 from .store import Index
 from .text import tokenize
 
@@ -55,12 +58,33 @@ CLARIFY_PROMPT = """Вопрос сотрудника слишком общий:
 RECORD_RE = re.compile(r"\b(?:СИ|ОБ|ЭРИ|КИ|МТ|П)-\d{3,4}(?:-\d{2})?\b", re.I)
 # вопрос о правиле: что делать, можно ли, кто должен… — вместе с номером записи даёт маршрут «оба источника»
 RULE_RE = re.compile(r"можно ли|нужно ли|надо ли|требуется ли|положено ли|разрешается|допускается|запрещ|"
+                     r"в какой срок|в течение какого|за какое время|в каком порядке|"
                      r"что (?:делать|нужно|необходимо|требуется)|как (?:быть|поступить|оформить|действовать)|"
                      r"порядок|кто (?:должен|подписывает|оформляет|утверждает|отвечает|принимает)|обязан|"
                      r"имею ли право", re.I)
 FOLLOWUP_RE = re.compile(
     r"^(?:а|и|но|тогда|ещё|еще)\b|\b(?:это|этого|этому|этом|этот|эта|эту|эти|этих|он|она|оно|они|его|её|ее|их|"
     r"него|неё|нее|ним|ней|нём|нем|там|туда|тот|та|те|того|такой|такое|такие|такая)\b", re.I)
+
+
+# вопросы о составе базы знаний и о документе целиком
+DOCS_Q_RE = re.compile(
+    r"\b(?:какие|какой|какая|список|перечень|перечисли)\s+(?:(?:есть|имеются|у вас|у нас|в базе)\s+)*"
+    r"(?:документ\w*|регламент\w*|инструкци\w*|руководств\w*|стандарт\w*|гост\w*|нормативн\w*)|"
+    r"в каких документах|есть ли (?:у вас |в базе )?(?:документ|инструкци|регламент|руководств)", re.I)
+SUMMARY_Q_RE = re.compile(
+    r"\bо ч[её]м\b|кратк\w* содержани|кратко (?:опиши|перескажи|расскажи)|что за документ|"
+    r"что (?:содержит|описывает|устанавливает|регулирует)|для чего (?:нужен|предназначен)", re.I)
+def _load_glossary() -> dict[str, list[str]]:
+    path = settings.raw_dir.parent / "glossary.yaml"
+    if not path.exists():
+        return {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")).get("terms", {}) or {}
+
+
+GLOSSARY = _load_glossary()
+TOPIC_NOISE_RE = re.compile(r"\b(?:есть|имеются|у вас|у нас|в базе|про|по теме|на тему|о|об|по|касаются|касающиеся|"
+                            r"описан\w*|говорится|упоминается|рассказывается|написано)\b", re.I)
 
 
 @dataclass
@@ -78,6 +102,7 @@ class AgentResult:
     stats: dict = field(default_factory=dict)
     asked: str | None = None       # вопрос, переписанный с учётом диалога (если отличается)
     options: list = field(default_factory=list)   # варианты уточнения для status == clarify
+    labels: list = field(default_factory=list)    # русские подписи столбцов rows
 
     @property
     def answered(self) -> bool:
@@ -94,6 +119,68 @@ def _sources(a) -> list[dict]:
 class Agent:
     def __init__(self, index: Index | None = None):
         self.index = index or Index.load(settings.index_dir)
+        self._cards, self._cards_key = {}, None
+
+    # ---------- документы целиком ----------
+
+    @property
+    def cards(self) -> dict[str, dict]:
+        """Карточки документов; пересобираются, если индекс изменился (загрузка, удаление, отмена редакции)."""
+        key = (len(self.index.chunks), self.index.chunks[-1].id if self.index.chunks else None,
+               tuple(sorted({(c.doc_id, c.access, c.doc_kind) for c in self.index.chunks})))
+        if key != self._cards_key:
+            self._cards, self._cards_key = build_cards(self.index), key
+        return self._cards
+
+    def _ranked_cards(self, query: str, allowed: set[str]) -> list[tuple[float, dict]]:
+        cards = [c for c in self.cards.values() if c["access"] in allowed]
+        if not cards:
+            return []
+        scores = llm.rerank(query, [card_text(c)[:1500] for c in cards])
+        return sorted(zip(scores, cards), key=lambda x: -x[0])
+
+    def answer_catalog(self, question: str, role: str, allowed: set[str]) -> "AgentResult":
+        """«Какие документы есть про паяльные станции?» — список из каталога, без генерации текста."""
+        topic = re.sub(r"[?!.,]+", " ", TOPIC_NOISE_RE.sub(" ", DOCS_Q_RE.sub(" ", question))).strip()
+        if tokenize(topic):
+            topic_words = set(tokenize(topic))
+            extra = [w for term, syn in GLOSSARY.items() if set(tokenize(term)) <= topic_words for w in syn]
+            query = f"{topic} ({', '.join(extra)})" if extra else topic
+            ranked = self._ranked_cards(query, allowed)
+            best = ranked[0][0] if ranked else 0.0
+            chosen = [(s, c) for s, c in ranked if s >= max(0.1, best * 0.2)]
+            # тема может быть в тексте, а не в названии («по метрологии» — РИ ДП-04 «…средствами измерений»):
+            # добавляем документы, фрагменты которых уверенно находит обычный поиск по теме
+            have = {c["doc_id"] for _, c in chosen}
+            for h in retrieve(self.index, query, allowed).hits:
+                if not h.neighbor and h.score >= 0.3 and h.chunk.doc_id not in have and h.chunk.doc_id in self.cards:
+                    have.add(h.chunk.doc_id)
+                    chosen.append((h.score, self.cards[h.chunk.doc_id]))
+            head = f"Документы по теме «{topic}»:" if chosen else f"Документов по теме «{topic}» в базе знаний нет."
+        else:
+            chosen = [(1.0, c) for c in sorted(self.cards.values(), key=lambda c: (c["kind"], c["title"]))
+                      if c["access"] in allowed]
+            head = "Документы в базе знаний:"
+        lines = [f"{n}. {c['title']} — {c['kind'].lower()}" + (f", {c['pages']} стр." if c.get("pages") else "")
+                 + f" [{n}]" for n, (_, c) in enumerate(chosen, 1)]
+        sources = [{"n": n, "label": c["title"], "text": card_text(c), "doc_id": c["doc_id"], "doc_kind": c["kind"],
+                    "clause": None, "page": None, "page_end": None, "cited": True, "score": round(s, 3)}
+                   for n, (s, c) in enumerate(chosen, 1)]
+        status = "answer" if chosen else "no_data"
+        return AgentResult(question, role, "documents", status, "\n".join([head] + lines), sources=sources,
+                           stats={"catalog": True})
+
+    def answer_summary(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
+        """«О чём ГОСТ Р 2.105-2019?» — пересказ по карточке документа (область применения и разделы)."""
+        ranked = self._ranked_cards(question, allowed)
+        if not ranked or ranked[0][0] < 0.3:
+            return None            # документ не назван явно — обычный поиск по фрагментам
+        score, card = ranked[0]
+        retrieval = Retrieval(hits=[Hit(card_chunk(card), score, None, None)], best_score=score,
+                              confident=True, scored_by="reranker")
+        a = answer_from_documents(question, retrieval)
+        return AgentResult(question, role, "documents", a.status, a.text, sources=_sources(a),
+                           stats={**a.stats, "summary": True})
 
     # ---------- понимание вопроса ----------
 
@@ -169,17 +256,28 @@ class Agent:
             asked = self.condense(question, history)
 
         auto = route == "auto"
-        if auto:
+        result = db_result = a_db = None
+        if route in ("auto", "documents") and DOCS_Q_RE.search(asked):
+            step("Ищу подходящие документы в каталоге…")
+            result = self.answer_catalog(asked, role, allowed)
+            route = "documents"
+        elif route in ("auto", "documents") and SUMMARY_Q_RE.search(asked):
+            step("Ищу документ и его описание…")
+            result = self.answer_summary(asked, role, allowed)
+            if result is not None:
+                route = "documents"
+        if result is None and auto:
             step("Выбираю, где искать ответ…")
             route = self.route(asked)
 
-        result = db_result = a_db = None
         if route in ("database", "both"):
             step("Запрос к учётной базе…")
             records = [m.upper() for m in RECORD_RE.findall(asked)] if route == "both" else None
-            a = a_db = answer_from_database(asked, settings.db_path, records=records or None)
+            # похожие записи ищем, только когда вопрос явно к базе (не для второго шанса после документов)
+            a = a_db = answer_from_database(asked, settings.db_path, records=records or None,
+                                            near=route == "database")
             db_result = AgentResult(question, role, "database", a.status, a.text, sql=a.sql,
-                                    columns=a.columns, rows=a.rows, stats=a.stats)
+                                    columns=a.columns, rows=a.rows, stats=a.stats, labels=a.labels)
             if route == "database":
                 if a.status == "answer" and a.rows:
                     result = db_result
@@ -191,6 +289,12 @@ class Agent:
             # для «запись + правило» ищем с учётом того, что это за запись и в каком она состоянии
             summary = a_db.summary if route == "both" and a_db is not None else ""
             retrieval = retrieve(self.index, f"{asked} {summary}".strip(), allowed)
+            if asked != question and history:
+                # уточнение в диалоге: ищем и вместе с темой предыдущего вопроса («отказ категории Б» +
+                # «ночная смена» → раздел о ночной смене), добавляем до двух новых фрагментов
+                extra = retrieve(self.index, f"{asked} {history[-1]['question']}", allowed)
+                seen = {h.chunk.id for h in retrieval.hits}
+                retrieval.hits += [h for h in extra.hits if not h.neighbor and h.chunk.id not in seen][:2]
             prev_docs = set((history or [{}])[-1].get("docs") or [])
             if (asked != question and not retrieval.confident and retrieval.hits
                     and retrieval.hits[0].chunk.doc_id in prev_docs
@@ -218,6 +322,7 @@ class Agent:
                     if a.answered and facts:
                         result.text = f"**По учётной базе**\n\n{db_result.text}\n\n**По документам**\n\n{a.text}"
                         result.sql, result.columns, result.rows = db_result.sql, db_result.columns, db_result.rows
+                        result.labels = db_result.labels
                     elif db_result and db_result.status == "answer":
                         result = db_result   # в документах правила нет — показываем запись из базы
                     else:
@@ -228,7 +333,7 @@ class Agent:
                     b = answer_from_database(asked, settings.db_path)
                     if b.status == "answer" and b.rows:
                         result = AgentResult(question, role, "database", b.status, b.text, sql=b.sql,
-                                             columns=b.columns, rows=b.rows, stats=b.stats)
+                                             columns=b.columns, rows=b.rows, stats=b.stats, labels=b.labels)
                 elif not result.answered and db_result and db_result.status == "answer":
                     result = db_result   # «записей нет» из базы — тоже ответ (например, «на складе таких нет»)
 

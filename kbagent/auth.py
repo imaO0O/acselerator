@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import time
+from pathlib import Path
 
 import yaml
 
@@ -17,7 +18,7 @@ from .config import settings
 
 ITERATIONS = 200_000
 SESSION_TTL = 12 * 3600          # сеанс живёт 12 часов
-HISTORY_LIMIT = 50               # сколько реплик диалога хранить на пользователя
+HISTORY_LIMIT = 100              # сколько реплик хранить в одном диалоге
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -94,24 +95,71 @@ def end_session(token: str | None) -> None:
         _write_sessions(sessions)
 
 
-# ---------- история диалога ----------
+# ---------- диалоги ----------
 
-def _history_path(login: str):
-    safe = re.sub(r"[^\w\-]", "_", login)
-    return settings.log_dir / "history" / f"{safe}.json"
+def _safe(login: str) -> str:
+    return re.sub(r"[^\w\-]", "_", login)
 
 
-def load_history(login: str) -> list[dict]:
+def _conv_dir(login: str) -> Path:
+    return settings.log_dir / "history" / _safe(login)
+
+
+def new_conversation() -> dict:
+    now = time.strftime("%Y-%m-%d %H:%M")
+    return {"id": time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3), "title": "Новый диалог",
+            "created": now, "updated": now, "items": []}
+
+
+def _migrate_legacy(login: str) -> None:
+    """История одного диалога из прежней версии (logs/history/<логин>.json) становится первым диалогом."""
+    legacy = settings.log_dir / "history" / f"{_safe(login)}.json"
+    if not legacy.exists():
+        return
     try:
-        return json.loads(_history_path(login).read_text(encoding="utf-8"))
+        items = json.loads(legacy.read_text(encoding="utf-8"))
+    except ValueError:
+        items = []
+    if items:
+        conv = new_conversation()
+        conv.update(title=items[0]["question"][:60], items=items)
+        save_conversation(login, conv)
+    legacy.unlink()
+
+
+def list_conversations(login: str) -> list[dict]:
+    _migrate_legacy(login)
+    out = []
+    for path in _conv_dir(login).glob("*.json"):
+        try:
+            conv = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        questions = " ".join(i["question"] for i in conv.get("items", []))
+        out.append({"id": conv["id"], "title": conv["title"], "updated": conv["updated"],
+                    "count": len(conv.get("items", [])), "questions": questions})
+    return sorted(out, key=lambda c: c["updated"], reverse=True)
+
+
+def load_conversation(login: str, conv_id: str) -> dict | None:
+    try:
+        return json.loads((_conv_dir(login) / f"{_safe(conv_id)}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return []
+        return None
 
 
-def save_history(login: str, history: list[dict]) -> None:
-    path = _history_path(login)
+def save_conversation(login: str, conv: dict) -> None:
+    if conv["items"] and conv["title"] == "Новый диалог":
+        conv["title"] = conv["items"][0]["question"][:60]
+    conv["updated"] = time.strftime("%Y-%m-%d %H:%M")
+    conv["items"] = conv["items"][-HISTORY_LIMIT:]
+    path = _conv_dir(login) / f"{_safe(conv['id'])}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(history[-HISTORY_LIMIT:], ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(conv, ensure_ascii=False), encoding="utf-8")
+
+
+def delete_conversation(login: str, conv_id: str) -> None:
+    (_conv_dir(login) / f"{_safe(conv_id)}.json").unlink(missing_ok=True)
 
 
 # ---------- оценки ответов ----------

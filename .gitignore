@@ -20,3 +20,6 @@ data/raw/uploaded/
 # демо-база пересоздаётся при запуске с датами от текущего дня (scripts/make_demo_db.py)
 data/demo_db/uchet.sqlite
 data/demo_db/dates.json
+
+# ключи API (только хэши) — выпускаются на месте установки
+data/api_keys.yaml

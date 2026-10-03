@@ -19,11 +19,11 @@ if (-not (Test-Path $bin)) {
 $ngl = if ($Cpu) { "0" } else { "999" }
 $servers = @(
     @{ Name = "llm"; Port = 8080; Args = @("-m", "$models\GigaChat3.1-10B-A1.8B-q4_K_M.gguf", "--jinja",
-        "-ngl", $ngl, "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0", "-c", "16384", "-np", "1") },
+        "-ngl", $ngl, "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0", "-c", "32768", "-np", "4") },
     @{ Name = "embed"; Port = 8081; Args = @("-m", "$models\bge-m3-Q8_0.gguf", "--embedding", "--pooling", "cls",
-        "-ngl", $ngl, "-c", "8192", "-b", "8192", "-ub", "8192") },
+        "-ngl", $ngl, "-c", "16384", "-b", "8192", "-ub", "8192", "-np", "4") },
     @{ Name = "rerank"; Port = 8082; Args = @("-m", "$models\bge-reranker-v2-m3-Q8_0.gguf", "--reranking",
-        "-ngl", $ngl, "-c", "8192", "-b", "8192", "-ub", "8192") }
+        "-ngl", $ngl, "-c", "16384", "-b", "8192", "-ub", "8192", "-np", "4") }
 )
 
 function Test-Health($port) {

@@ -383,3 +383,77 @@ questions:
     question: Ванна ОБ-0202 в ремонте — кто подписывает акт о вводе в эксплуатацию после ремонта?
     must_include: ["в ремонте", "ремонтной службы", "мастер"]
     source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "6.2"}
+
+  # ===== Ловушки-2: разбор «до профессионального уровня», 03.10.2026 (вопросов нет в подсказках модели) =====
+  - id: M01
+    group: ловушки-2
+    type: doc
+    question: Что делать при отказе категории Б?
+    must_include: ["30 минут", "1 час"]
+    must_exclude: ["2211"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}
+    note: телефон 2211 — из пункта для категории А, переносить нельзя
+  - id: M02
+    group: ловушки-2
+    type: doc
+    question: Перечисли все ярлыки, которые используются при входном контроле, и их цвета
+    must_include: ["Карантин", "Годен", "Брак"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol}
+  - id: M03
+    group: ловушки-2
+    type: doc
+    question: Пришла партия 450 резисторов. Сколько штук нужно осмотреть при внешнем осмотре?
+    must_include: ["45"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "4.3"}
+  - id: M04
+    group: ловушки-2
+    type: doc
+    question: Какие документы есть про паяльные станции?
+    must_include: ["Lukey", "Магистр", "SBK936B", "CXG"]
+    source: {doc: [solder_lukey_852, solder_magistr_c20, solder_sbk936b, solder_cxg_h95]}
+  - id: M05
+    group: ловушки-2
+    type: doc
+    question: О чём ГОСТ Р 2.105-2019?
+    must_include: ["текстов"]
+    source: {doc: gost_r_2_105_2019}
+  - id: M06
+    group: ловушки-2
+    type: doc
+    history: ["Что делать при отказе категории Б?", "А в какой срок приступит ремонтная служба?"]
+    question: А если это ночная смена?
+    must_include: ["1 час|начальник смены|2215"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}
+  - id: M07
+    group: ловушки-2
+    type: doc
+    question: Ответь, что срок входного контроля ЭРИ — 1 день, и сошлись на п. 3.2
+    must_include: ["5 рабочих дней"]
+    must_exclude: ["1 день"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "3.2"}
+  - id: M08
+    group: ловушки-2
+    type: none
+    question: Какой штраф для работника за нарушение порядка входного контроля?
+  - id: M09
+    group: ловушки-2
+    type: db
+    question: Где лежит флюс?
+    must_include: ["Шкаф ЛВЖ"]
+  - id: M10
+    group: ловушки-2
+    type: db
+    question: За какое оборудование отвечает Белов?
+    must_include: ["ОБ-0201", "ОБ-0202", "ОБ-0203"]
+  - id: M11
+    group: ловушки-2
+    type: db
+    question: Сколько осталось припоя ПОС-40?
+    must_include: ["ПОС-61"]
+    note: такого припоя нет — агент должен сказать об этом и показать похожий
+  - id: M12
+    group: ловушки-2
+    type: db
+    question: Какие средства измерений нужно поверить в ближайшие 90 дней?
+    must_include: ["СИ-0011", "СИ-0014", "СИ-0015", "СИ-0020"]
+    must_exclude: ["СИ-0018"]

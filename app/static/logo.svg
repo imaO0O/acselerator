@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Агент по документам и учёту">
+  <path d="M14 6h26l12 12v38a2 2 0 0 1-2 2H14a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" fill="#6B4FA0"/>
+  <path d="M40 6v10a2 2 0 0 0 2 2h10z" fill="#4B3A66"/>
+  <rect x="19" y="27" width="26" height="8" rx="2" fill="#F5D547"/>
+  <rect x="20" y="29.5" width="24" height="3" rx="1.5" fill="#4B3A66"/>
+  <rect x="20" y="40" width="24" height="3" rx="1.5" fill="#FFFFFF" opacity=".85"/>
+  <rect x="20" y="48" width="16" height="3" rx="1.5" fill="#FFFFFF" opacity=".85"/>
+  <rect x="20" y="19" width="14" height="3" rx="1.5" fill="#FFFFFF" opacity=".85"/>
+</svg>
