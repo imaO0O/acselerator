@@ -13,5 +13,3 @@ __pycache__/
 .venv/
 .streamlit/secrets.toml
 
-# локальные настройки редактора
-.claude/
