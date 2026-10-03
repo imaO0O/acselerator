@@ -54,7 +54,6 @@ def main():
                      f"текст {c['gen_n']} ток. за {c['gen_ms'] / 1000:.1f} с") if c["prompt_ms"] else ""
             print(f"  {c['kind']:<16} {c['seconds']:5.2f} с  {extra}")
     print(f"\nМедиана: {statistics.median(totals):.1f} с")
-    del answer_mod
 
 
 if __name__ == "__main__":
