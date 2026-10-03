@@ -116,6 +116,13 @@ def _repair_aliases(sql: str) -> str:
     return sql
 
 
+def _fix_dates(sql: str) -> str:
+    """date('now') в SQLite — время UTC, а created_at хранит дату со временем:
+    «created_at <= date('now')» теряет сегодняшние записи. Берём местное время и сравниваем по дате."""
+    sql = re.sub(r"\b(date|datetime)\(\s*'now'(?!\s*,\s*'localtime')", r"\1('now', 'localtime'", sql, flags=re.I)
+    return re.sub(r"(?<!date\()\b((?:\w+\.)?created_at)\b(?=\s*(?:between|>=|<=|<|>|=))", r"date(\1)", sql, flags=re.I)
+
+
 def _check(sql: str) -> None:
     if not re.match(r"^(select|with)\b", sql, re.I):
         raise ValueError("разрешены только запросы SELECT")
@@ -164,7 +171,7 @@ def answer_from_database(question: str, db_path: Path) -> DbAnswer:
     if "НЕТ_ДАННЫХ" in raw:
         return DbAnswer("no_data", "В учётной базе нет данных для ответа на этот вопрос.", stats=stats)
 
-    sql = _repair_aliases(_extract_sql(raw))
+    sql = _fix_dates(_repair_aliases(_extract_sql(raw)))
     error = None
     for attempt in range(2):
         try:
@@ -177,7 +184,7 @@ def answer_from_database(question: str, db_path: Path) -> DbAnswer:
                 return DbAnswer("error", f"Не удалось выполнить запрос к базе: {error}", sql=sql, stats=stats)
             fix = SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION, question=question) + f"\n{sql}\n\nОшибка: {error}\nИсправленный SQL:"
             raw, _ = llm.chat([{"role": "user", "content": fix}], max_tokens=300)
-            sql = _repair_aliases(_extract_sql(raw))
+            sql = _fix_dates(_repair_aliases(_extract_sql(raw)))
 
     text, s2 = llm.chat([{"role": "user", "content": ANSWER_PROMPT.format(
         question=question, count=len(rows), table=_table(columns, rows))}], max_tokens=400)

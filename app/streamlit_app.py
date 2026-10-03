@@ -97,9 +97,16 @@ def render_answer(r: dict, key: str = "x") -> None:
             with st.expander(f"[{s['n']}] {s['label']}"):
                 render_source(s, key=f"dl-{key}-{s['n']}")
     if other and r["status"] != "answer":
-        st.markdown("**Где ещё можно поискать**")
-        for s in other[:3]:
-            st.caption(f"• {s['label']}")
+        # только заметно похожие фрагменты и по одному на документ — иначе подсказка выглядит случайной
+        hints, seen = [], set()
+        for s in other:
+            if s["score"] >= 0.05 and s.get("doc_id") not in seen:
+                seen.add(s.get("doc_id"))
+                hints.append(s)
+        if hints:
+            st.markdown("**Где ещё можно поискать**")
+            for s in hints[:3]:
+                st.caption(f"• {s['label']}")
     elif other:
         with st.expander("Другие найденные фрагменты"):
             for s in other:
