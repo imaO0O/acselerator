@@ -18,11 +18,11 @@ from docx import Document as DocxDocument
 
 from .text import join_hyphenated, normalize
 
-CLAUSE_RE = re.compile(r"^(?:п\.\s*)?([1-9]\d?(?:\.\d{1,3}){0,4})(\.?)\s+(?=[А-ЯЁA-Z«\"(])")
+CLAUSE_RE = re.compile(r"^(?:п\.\s*)?([1-9]\d{0,2}(?:\.\d{1,3}){0,4})(\.?)\s+(?=[А-ЯЁA-Z«\"(])")
 ROMAN_RE = re.compile(r"^([IVXL]{1,6})\.\s+[А-ЯЁA-Z]")
 ANNEX_RE = re.compile(r"^(Приложение\s+(?:N|№)?\s*[\dА-Я]+)", re.IGNORECASE)
 
-TARGET, MAX_LEN, MIN_LEN, OVERLAP = 900, 1400, 250, 150
+TARGET, MAX_LEN, OVERLAP = 900, 1400, 150
 
 
 @dataclass
@@ -67,7 +67,8 @@ def _pdf_pages(path: Path) -> list[tuple[int, list[str]]]:
     doc = pymupdf.open(path)
     pages = []
     for i, page in enumerate(doc):
-        raw = normalize(page.get_text("text", sort=True))
+        # естественный порядок блоков: при sort=True колонки двухколоночной вёрстки перемешиваются
+        raw = normalize(page.get_text("text"))
         lines = [l.strip() for l in raw.split("\n")]
         pages.append((i + 1, [l for l in lines if l]))
     # повторяющиеся колонтитулы и номера страниц
@@ -112,6 +113,22 @@ def _is_heading(line: str, number: str | None, dotted: bool) -> bool:
     return 8 < len(line) < 90 and len(letters) > 5 and all(c.isupper() for c in letters)
 
 
+def _split_inline_clauses(lines: list[str], last_top):
+    """В PDF приказов пункт может начинаться в середине строки:
+    «…ремонт инструмента. 117. Работать с …». Строка разрезается, если внутри неё
+    стоит номер следующего по порядку пункта. Генератор: номер последнего пункта
+    обновляется по мере разбора, поэтому проверка идёт по актуальному значению."""
+    for line in lines:
+        while True:
+            n = last_top() + 1
+            m = re.search(rf"(?<=[.;:)»\"])\s+(?:{n}|{n + 1}|{n + 2})\.\s+(?=[А-ЯЁ])", line)
+            if not m or m.start() < 3:
+                yield line
+                break
+            yield line[:m.start()].strip()
+            line = line[m.start():].strip()
+
+
 def _units(pages) -> list[_Unit]:
     units: list[_Unit] = []
     heading = None
@@ -125,15 +142,15 @@ def _units(pages) -> list[_Unit]:
         current = _Unit(current.clause, heading, None, None, [])
 
     for page_no, lines in pages:
-        for line in lines:
+        for line in _split_inline_clauses(lines, lambda: last_top):
             m = CLAUSE_RE.match(line)
             number = m.group(1) if m else None
             dotted = bool(m and m.group(2))
             if number and "." not in number:
-                # одиночные номера принимаем только по порядку (1, 2, 3 …),
-                # чтобы «10 Ом» в середине текста не стал пунктом 10
+                # одиночные номера принимаем только по порядку (допуская пропуск
+                # до двух нераспознанных), чтобы «220 В» в тексте не стал пунктом 220
                 value = int(number)
-                if value not in (1, last_top + 1):
+                if not (value == 1 or last_top < value <= last_top + 3):
                     number = None
             if _is_heading(line, number, dotted):
                 flush()
@@ -191,10 +208,12 @@ def _chunks(units: list[_Unit], meta: dict) -> list[Chunk]:
         for piece in (_split_long(text) if len(text) > MAX_LEN else [text]):
             chunks.append(Chunk(id=f"{meta['id']}#{len(chunks)}", text=piece, **base))
 
+    # Пункты одного раздела объединяются, пока фрагмент не превысит целевой размер:
+    # короткий раздел («2 Классификация отказов» из четырёх пунктов) остаётся целым.
     for unit in units:
         same_section = buf and buf[-1].heading == unit.heading
         size = sum(len(u.text) for u in buf)
-        if buf and (not same_section or size + len(unit.text) > TARGET or size >= MIN_LEN):
+        if buf and (not same_section or size + len(unit.text) > TARGET):
             emit(buf)
             buf = []
         buf.append(unit)

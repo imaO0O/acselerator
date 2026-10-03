@@ -33,7 +33,7 @@ class Settings:
     context_chunks: int = _env("KB_CONTEXT_CHUNKS", 5)  # фрагментов в контекст модели
     # Порог отказа: если лучший фрагмент оценён переранжировщиком ниже порога,
     # агент отвечает «данных нет», не вызывая модель. Подбирается на эталонном наборе.
-    rerank_threshold: float = _env("KB_RERANK_THRESHOLD", 0.12)
+    rerank_threshold: float = _env("KB_RERANK_THRESHOLD", 0.03)
     # Запасной порог по косинусной близости, если переранжировщик выключен.
     dense_threshold: float = _env("KB_DENSE_THRESHOLD", 0.50)
 
