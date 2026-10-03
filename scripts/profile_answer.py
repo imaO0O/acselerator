@@ -13,7 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from kbagent import answer as answer_mod  # noqa: E402
 from kbagent import llm  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 
