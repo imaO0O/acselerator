@@ -42,20 +42,19 @@ SQL_PROMPT = """Ты переводишь вопрос сотрудника в �
 - Текущая дата: date('now').
 - Выбирай столбцы, нужные для ответа, и всегда добавляй инвентарный или номенклатурный номер, если он есть.
 - Не добавляй условий, которых нет в вопросе.
+- Если пишешь столбцы с псевдонимом таблицы (e.inv_no), объяви его: FROM equipment e.
 - Если на вопрос нельзя ответить по этим таблицам, верни ровно: НЕТ_ДАННЫХ
 Верни только SQL без пояснений.
 
 Примеры:
-Вопрос: У каких средств измерений истёк срок поверки?
-SQL: SELECT inv_no, name, model, next_check, status FROM measuring_instruments WHERE next_check < date('now') ORDER BY next_check
-Вопрос: Сколько микроконтроллеров годно к выдаче?
-SQL: SELECT part_no, name, qty, unit, batch FROM stock WHERE lower(name) LIKE '%микроконтроллер%' AND inspection_status = 'годен'
+Вопрос: Какие средства измерений нужно поверить в ближайший месяц?
+SQL: SELECT inv_no, name, model, next_check, status FROM measuring_instruments WHERE next_check BETWEEN date('now') AND date('now', '+30 days') ORDER BY next_check
+Вопрос: Сколько диодов Шоттки годно к выдаче?
+SQL: SELECT part_no, name, qty, unit, batch FROM stock WHERE lower(name) LIKE '%диод%' AND lower(name) LIKE '%шоттки%' AND inspection_status = 'годен'
 Вопрос: Есть ли на складе конденсаторы 100 нФ?
 SQL: SELECT part_no, name, qty, unit, batch, inspection_status FROM stock WHERE lower(name) LIKE '%конденсатор%' AND lower(name) LIKE '%100 нф%'
-Вопрос: Какие партии сейчас на входном контроле?
-SQL: SELECT part_no, name, qty, unit, batch, received FROM stock WHERE inspection_status = 'карантин'
-Вопрос: Какие заявки на ремонт категории А открыты?
-SQL: SELECT r.id, r.inv_no, e.name, r.created_at, r.description, r.status FROM repair_requests r JOIN equipment e ON e.inv_no = r.inv_no WHERE r.category = 'А' AND r.status <> 'выполнена'
+Вопрос: Какие заявки на ремонт уже выполнены?
+SQL: SELECT r.id, r.inv_no, e.name, r.created_at, r.category, r.description FROM repair_requests r JOIN equipment e ON e.inv_no = r.inv_no WHERE r.status = 'выполнена'
 Вопрос: Сколько стоит обед в столовой?
 SQL: НЕТ_ДАННЫХ
 
@@ -65,7 +64,9 @@ SQL:"""
 ANSWER_PROMPT = """Ответь на вопрос сотрудника ТОЛЬКО по результату запроса к учётной базе.
 Для каждой записи приведи номер, наименование и значения, которые отвечают на вопрос (даты, количество, статус).
 Если записей несколько — оформи маркированным списком, по одной записи в строке.
+Не используй технические названия столбцов (last_check, next_check) — пиши по-русски: «последняя поверка», «очередная поверка».
 Числа, даты, номера и ФИО переписывай точно. Если результат пустой — так и скажи, что записей нет.
+Если вопрос не о записях учёта (например, о правилах, сроках или порядке действий по регламенту) или строки результата на него не отвечают — ответь ровно одним словом: НЕТ_ДАННЫХ.
 В конце ответа поставь ссылку [БД]. Отвечай кратко, по-русски.
 
 Вопрос: {question}
@@ -89,6 +90,29 @@ class DbAnswer:
 def _extract_sql(text: str) -> str:
     m = re.search(r"```(?:sql)?\s*(.+?)```", text, re.S | re.I)
     sql = (m.group(1) if m else text).strip().rstrip(";").strip()
+    return sql
+
+
+TABLES = ("equipment", "measuring_instruments", "repair_requests", "stock")
+
+
+def _repair_aliases(sql: str) -> str:
+    """Частая ошибка модели: «SELECT e.name FROM equipment WHERE …» — псевдоним не объявлен.
+    Если не объявлен ровно один псевдоним и ровно у одной таблицы его нет — подставляем."""
+    declared, bare = set(), []
+    for m in re.finditer(r"\b(?:from|join)\s+(\w+)(?:\s+(?:as\s+)?(?!where|join|on|group|order|limit|left|inner)(\w+))?",
+                         sql, re.I):
+        table, alias = m.group(1), m.group(2)
+        declared.add(table.lower())
+        if alias:
+            declared.add(alias.lower())
+        elif table.lower() in TABLES:
+            bare.append(m)
+    used = {a.lower() for a in re.findall(r"\b([a-z]\w*)\.\w+", sql, re.I)}
+    missing = used - declared
+    if len(missing) == 1 and len(bare) == 1:
+        m = bare[0]
+        sql = sql[:m.end(1)] + f" {missing.pop()}" + sql[m.end(1):]
     return sql
 
 
@@ -140,7 +164,7 @@ def answer_from_database(question: str, db_path: Path) -> DbAnswer:
     if "НЕТ_ДАННЫХ" in raw:
         return DbAnswer("no_data", "В учётной базе нет данных для ответа на этот вопрос.", stats=stats)
 
-    sql = _extract_sql(raw)
+    sql = _repair_aliases(_extract_sql(raw))
     error = None
     for attempt in range(2):
         try:
@@ -153,10 +177,13 @@ def answer_from_database(question: str, db_path: Path) -> DbAnswer:
                 return DbAnswer("error", f"Не удалось выполнить запрос к базе: {error}", sql=sql, stats=stats)
             fix = SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION, question=question) + f"\n{sql}\n\nОшибка: {error}\nИсправленный SQL:"
             raw, _ = llm.chat([{"role": "user", "content": fix}], max_tokens=300)
-            sql = _extract_sql(raw)
+            sql = _repair_aliases(_extract_sql(raw))
 
     text, s2 = llm.chat([{"role": "user", "content": ANSWER_PROMPT.format(
         question=question, count=len(rows), table=_table(columns, rows))}], max_tokens=400)
     stats.update(answer_seconds=s2["seconds"], tokens_per_second=s2.get("tokens_per_second"))
+    if "НЕТ_ДАННЫХ" in text:
+        return DbAnswer("no_data", "Записи учёта не отвечают на этот вопрос.", sql=sql, columns=columns,
+                        rows=[list(r) for r in rows], stats=stats)
     text = re.sub(r"\s*\[БД\]\s*", " ", text).strip() + " [БД]"
     return DbAnswer("answer", text, sql=sql, columns=columns, rows=[list(r) for r in rows], stats=stats)

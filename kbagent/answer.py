@@ -1,15 +1,20 @@
-"""Ответ по найденным фрагментам со ссылками и тремя уровнями защиты от выдумок.
+"""Ответ по найденным фрагментам со ссылками и четырьмя уровнями защиты от выдумок.
 
 1. Если поиск не нашёл ничего достаточно похожего — отказ без вызова модели.
 2. Модель получает только найденные фрагменты и инструкцию отвечать по ним,
    а при отсутствии ответа — вернуть маркер НЕТ_ДАННЫХ.
 3. Ответ проверяется программно: каждая ссылка [n] должна указывать на
    выданный модели фрагмент; ответ без единой верной ссылки не показывается.
+4. Если найденное лишь похоже на вопрос («зона сомнения» по оценке
+   переранжировщика), модель отдельно проверяет, что ответ относится к тому же
+   предмету: гарантия на прибор — не гарантия на ремонт, журнал нарядов — не
+   журнал входного контроля.
 """
 import re
 from dataclasses import dataclass, field
 
 from . import llm
+from .config import settings
 from .retriever import Hit, Retrieval
 
 NO_DATA = "НЕТ_ДАННЫХ"
@@ -69,12 +74,52 @@ def _context(hits: list[Hit]) -> str:
     return "\n\n".join(blocks)
 
 
+REF_RE = re.compile(r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]")   # [2], [1, 3], [1–3]
+
+
+def _ref_numbers(group: str) -> set[int]:
+    nums = set()
+    for part in re.split(r"\s*,\s*", group):
+        bounds = [int(x) for x in re.split(r"\s*[–-]\s*", part) if x]
+        nums.update(range(bounds[0], bounds[-1] + 1) if len(bounds) == 2 else bounds)
+    return nums
+
+
 def _valid_refs(text: str, n_hits: int) -> list[int]:
-    return sorted({int(n) for n in re.findall(r"\[(\d+)\]", text) if 1 <= int(n) <= n_hits})
+    return sorted({n for g in REF_RE.findall(text) for n in _ref_numbers(g) if 1 <= n <= n_hits})
+
+
+def _clean_refs(text: str, valid: list[int]) -> str:
+    """Убирает из ссылок номера несуществующих фрагментов: [1, 9] → [1]."""
+    def keep(m):
+        nums = [n for n in sorted(_ref_numbers(m.group(1))) if n in valid]
+        return f"[{', '.join(map(str, nums))}]" if nums else ""
+    return REF_RE.sub(keep, text)
+
+
+VERIFY_PROMPT = """Проверь ответ помощника по документам предприятия.
+
+Вопрос сотрудника: {question}
+Ответ помощника: {answer}
+
+Фрагменты документов, на которые ссылается ответ:
+{fragments}
+
+Ответ верен, только если выполнены оба условия:
+1) фрагменты говорят о том же самом предмете, о котором спрашивает сотрудник (тот же журнал, тот же вид работ, тот же прибор, та же процедура), а не о похожем;
+2) ответ прямо следует из фрагментов, а не додуман.
+Ответь одним словом: ДА или НЕТ."""
+
+
+def verify(question: str, text: str, hits: list[Hit], cited: list[int]) -> bool:
+    fragments = "\n\n".join(f"[{n}] {hits[n - 1].chunk.doc_title}: {hits[n - 1].chunk.text[:1200]}" for n in cited)
+    out, _ = llm.chat([{"role": "user", "content": VERIFY_PROMPT.format(
+        question=question, answer=text, fragments=fragments)}], max_tokens=5)
+    return "НЕТ" not in out.upper()
 
 
 def _too_short(text: str) -> bool:
-    bare = re.sub(r"\[\d+\]|[\s.,!]", "", text)
+    bare = re.sub(REF_RE.pattern + r"|[\s.,!]", "", text)
     return NO_DATA not in text and len(bare) < 12
 
 
@@ -120,8 +165,12 @@ def answer_from_documents(question: str, retrieval: Retrieval) -> Answer:
         if NO_DATA in text:
             return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
         valid = _valid_refs(text, len(hits))
-    # убираем ссылки на несуществующие фрагменты
-    text = re.sub(r"\[(\d+)\]", lambda m: m.group(0) if int(m.group(1)) in valid else "", text)
+    text = _clean_refs(text, valid)
     if not valid or _too_short(text):
         return Answer("unverified", "Не удалось подтвердить ответ ссылкой на документ.", hits=hits, stats=stats)
+    if retrieval.best_score < settings.confident_threshold or retrieval.scored_by != "reranker":
+        stats["verified"] = verify(question, text, hits, valid)
+        if not stats["verified"]:
+            return Answer("model_refused", "Найденные фрагменты относятся к другому вопросу — ответа в документах нет.",
+                          hits=hits, stats=stats)
     return Answer("answer", text.strip(), cited=valid, hits=hits, stats=stats)

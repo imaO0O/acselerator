@@ -50,6 +50,8 @@ def clause_covers(chunk_clause: str | None, gold: str) -> bool:
     g = clause_tuple(gold)
     if g[:len(lo)] == lo or g[:len(hi)] == hi:
         return True
+    if lo[:len(g)] == g or hi[:len(g)] == g:   # эталон — раздел «3», фрагмент — пункты 3.1–3.4
+        return True
     return lo <= g <= hi if len(lo) == len(g) == len(hi) else lo <= g[:len(lo)] <= hi
 
 
@@ -75,7 +77,7 @@ def main():
     rows = []
     for q in questions:
         r = agent.ask(q["question"], role=args.role)
-        row = {"id": q["id"], "type": q["type"], "question": q["question"], "route": r.route,
+        row = {"id": q["id"], "group": q.get("group", "основной"), "type": q["type"], "question": q["question"], "route": r.route,
                "status": r.status, "answer": r.text, "seconds": r.seconds,
                "best_score": r.stats.get("best_score"),
                "cited": "; ".join(s["label"] for s in r.sources if s["cited"]), "sql": r.sql or ""}
@@ -110,15 +112,26 @@ def main():
         "Время ответа, максимум": f"{max(r['seconds'] for r in rows):.1f} с",
     }
 
+    groups = []
+    for g in ["основной", "новый", "перефразировка", "опечатки"]:
+        gd = [r for r in doc if r["group"] == g]
+        gn = [r for r in none if r["group"] == g]
+        gb = [r for r in db if r["group"] == g]
+        cells = [f"{sum(r['correct'] for r in gd)} из {len(gd)}" if gd else "—",
+                 f"{sum(r['correct'] for r in gn)} из {len(gn)}" if gn else "—",
+                 f"{sum(r['correct'] for r in gb)} из {len(gb)}" if gb else "—"]
+        groups.append(f"| {g} | " + " | ".join(cells) + " |")
+
     RESULTS.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%d %H:%M")
     md = [f"# Результаты на эталонном наборе ({stamp})", "",
           f"Модель: {settings.llm_model}; порог отказа: {settings.rerank_threshold}; роль: {args.role}", "",
           "| Метрика | Значение |", "|---|---|"]
     md += [f"| {k} | {v} |" for k, v in m.items()]
-    md += ["", "| № | Вопрос | Итог | Статус | Время, с | Источник |", "|---|---|---|---|---|---|"]
+    md += ["", "По группам вопросов:", "", "| Группа | Верные ответы | Верные отказы | Учётная база |", "|---|---|---|---|"] + groups
+    md += ["", "| № | Группа | Вопрос | Итог | Статус | Время, с | Источник |", "|---|---|---|---|---|---|---|"]
     for r in rows:
-        md.append(f"| {r['id']} | {r['question']} | {'верно' if r['correct'] else 'ошибка'} | {r['status']} "
+        md.append(f"| {r['id']} | {r['group']} | {r['question']} | {'верно' if r['correct'] else 'ошибка'} | {r['status']} "
                   f"| {r['seconds']} | {r['cited'] or (r['sql'][:60] if r['sql'] else '—')} |")
     (RESULTS / "latest.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     with open(RESULTS / "latest.csv", "w", newline="", encoding="utf-8-sig") as f:
@@ -132,6 +145,7 @@ def main():
     print()
     for k, v in m.items():
         print(f"{k}: {v}")
+    print(chr(10).join(groups))
 
 
 if __name__ == "__main__":

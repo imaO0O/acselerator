@@ -2,46 +2,55 @@
 #   type: doc   — ответ есть в документах; source — документ и пункт (или страница)
 #         none  — ответа в документах нет, правильное поведение — отказ
 #         db    — ответ в учётной базе
+#   group: основной | новый | перефразировка | опечатки
 #   must_include — ключевые факты, которые должны быть в правильном ответе
 #                  (элементы через «|» — достаточно любого из вариантов)
 questions:
   # --- внутренние регламенты (демо) ---
   - id: Q01
+    group: основной
     type: doc
     question: Какой срок входного контроля для электрорадиоизделий?
     must_include: ["5 рабочих дней"]
     source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "3.2"}
   - id: Q02
+    group: основной
     type: doc
     question: Какой объём выборки при внешнем осмотре ЭРИ, если в партии больше 100 штук?
     must_include: ["10 %|10%", "20"]
     source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "4.3"}
   - id: Q03
+    group: основной
     type: doc
     question: Что оформляется на забракованную при входном контроле партию и куда её перемещают?
     must_include: ["ВК-3", "изолятор брака"]
     source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "4.6"}
   - id: Q04
+    group: основной
     type: doc
     question: По какому внутреннему телефону сообщить дежурному диспетчеру об отказе оборудования, угрожающем жизни?
     must_include: ["2211"]
     source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "3.1"}
   - id: Q05
+    group: основной
     type: doc
     question: Кому сообщает начальник ночной смены, если за 10 минут не удалось связаться с дежурным энергетиком?
     must_include: ["главн", "инженер"]
     source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "7.2"}
   - id: Q06
+    group: основной
     type: doc
     question: В какой срок ремонтная служба должна приступить к работам при отказе категории Б?
     must_include: ["1 час"]
     source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "5.1"}
   - id: Q07
+    group: основной
     type: doc
     question: Сколько часов можно держать микросхемы уровня MSL 3 после вскрытия влагозащитной упаковки до монтажа?
     must_include: ["168"]
     source: {doc: RI-DP-03_khranenie_eri, clause: "2.3"}
   - id: Q08
+    group: основной
     type: doc
     question: В каких пределах должно быть сопротивление цепи антистатического браслета при проверке?
     must_include: ["0,75", "10 МОм"]
@@ -49,41 +58,49 @@ questions:
 
   # --- открытые документы ---
   - id: Q09
+    group: основной
     type: doc
     question: На какой срок выдаётся наряд-допуск на работы в электроустановках и можно ли его продлить?
     must_include: ["15 календарных дней", "1 раз"]
     source: {doc: ot_electro_903n, clause: "6.3"}
   - id: Q10
+    group: основной
     type: doc
     question: Что должен сделать работник, если обнаружил неисправность ручного инструмента?
     must_include: ["извещ|сообщ", "руководител"]
     source: {doc: ot_instrument_835n, clause: "28"}
   - id: Q11
+    group: основной
     type: doc
     question: Можно ли работать с ручным пиротехническим инструментом с приставной лестницы?
     must_include: ["запрещ|нельзя"]
     source: {doc: ot_instrument_835n, clause: "117"}
   - id: Q12
+    group: основной
     type: doc
     question: Какие поля должны быть у организационно-распорядительного документа по ГОСТ Р 7.0.97-2016?
     must_include: ["20 мм", "10 мм"]
     source: {doc: gost_r_7_0_97_2016, clause: "6.1"}
   - id: Q13
+    group: основной
     type: doc
     question: Какой абзацный отступ установлен для текста документа по ГОСТ Р 7.0.97-2016?
     must_include: ["1,25"]
     source: {doc: gost_r_7_0_97_2016, clause: "3.4"}
   - id: Q14
+    group: основной
     type: doc
     question: Какой должна быть высота букв и цифр при рукописном выполнении текстового документа по ГОСТ Р 2.105-2019?
     must_include: ["2,5 мм"]
     source: {doc: gost_r_2_105_2019, clause: "4.8.1"}
   - id: Q15
+    group: основной
     type: doc
     question: Какой плавкий предохранитель установлен в мультиметре MAS830L?
     must_include: ["200"]
     source: {doc: multimeter_mas830l}
   - id: Q16
+    group: основной
     type: doc
     question: При какой температуре окружающего воздуха допускается эксплуатация паяльной станции «Магистр Ц20-ДВ»?
     must_include: ["15", "35"]
@@ -91,37 +108,208 @@ questions:
 
   # --- ответа в документах нет ---
   - id: Q17
+    group: основной
     type: none
     question: Сколько стоит поверка одного осциллографа в аккредитованной организации?
   - id: Q18
+    group: основной
     type: none
     question: Какая норма бесплатной выдачи молока работникам участка пайки?
   - id: Q19
+    group: основной
     type: none
     question: Каков порядок оформления служебной командировки на предприятии?
   - id: Q20
+    group: основной
     type: none
     question: Сколько дней ежегодного отпуска положено монтажнику радиоаппаратуры?
 
   # --- учётная база (отдельный блок) ---
   - id: D01
+    group: основной
     type: db
     question: Какое оборудование сейчас находится в ремонте?
     must_include: ["ОБ-0102", "ОБ-0202"]
   - id: D02
+    group: основной
     type: db
     question: У каких средств измерений истёк срок поверки?
     must_include: ["СИ-0012", "СИ-0016"]
     note: "Зависит от текущей даты: верно для дат с 26.09.2026 по 20.10.2026."
   - id: D03
+    group: основной
     type: db
     question: Сколько резисторов 10 кОм годно к выдаче в производство?
     must_include: ["4000"]
   - id: D04
+    group: основной
     type: db
     question: Какие партии сейчас находятся на входном контроле в зоне карантина?
     must_include: ["ЭРИ-1003|конденсатор", "ЭРИ-1004|стабилизатор", "КИ-2002|DB-9"]
   - id: D05
+    group: основной
     type: db
     question: Какие заявки на ремонт с категорией отказа А сейчас открыты?
     must_include: ["ОБ-0202|2"]
+
+  # ===== Расширение: новые факты =====
+  - id: N01
+    group: новый
+    type: doc
+    question: На какой срок выдаётся наряд-допуск при работах под напряжением на токоведущих частях?
+    must_include: ["1 календарн"]
+    source: {doc: ot_electro_903n, clause: "6.3"}
+  - id: N02
+    group: новый
+    type: doc
+    question: Сколько хранятся наряды-допуски, работы по которым полностью закончены?
+    must_include: ["1 год"]
+    source: {doc: ot_electro_903n, clause: "6.5"}
+  - id: N03
+    group: новый
+    type: doc
+    question: Где проставляются номера страниц в документе по ГОСТ Р 7.0.97-2016?
+    must_include: ["посередине верхнего поля", "10 мм"]
+    source: {doc: gost_r_7_0_97_2016, clause: "3.2"}
+  - id: N04
+    group: новый
+    type: doc
+    question: Какое левое поле должно быть у документов со сроком хранения свыше 10 лет?
+    must_include: ["30 мм"]
+    source: {doc: gost_r_7_0_97_2016, clause: "6.1"}
+  - id: N05
+    group: новый
+    type: doc
+    question: Как часто нужно включать осциллограф АКИП-4115 при длительном хранении?
+    must_include: ["одного раза|1 раз", "год"]
+    source: {doc: osc_akip_4115v, clause: "12.2"}
+  - id: N06
+    group: новый
+    type: doc
+    question: Какой температурный диапазон у паяльного фена станции CXG DES H95?
+    must_include: ["80", "500"]
+    source: {doc: solder_cxg_h95}
+  - id: N07
+    group: новый
+    type: doc
+    question: Каким ярлыком маркируют продукцию, прошедшую входной контроль?
+    must_include: ["зелён|зелен", "Годен ВК"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "5.1"}
+  - id: N08
+    group: новый
+    type: doc
+    question: Что делать с микросхемами, если превышен допустимый срок хранения после вскрытия упаковки?
+    must_include: ["24", "125"]
+    source: {doc: RI-DP-03_khranenie_eri, clause: "2.4"}
+  - id: N09
+    group: новый
+    type: doc
+    question: В течение какого времени мастер участка должен зарегистрировать отказ оборудования и оформить заявку?
+    must_include: ["30 минут"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "4.1"}
+  - id: N10
+    group: новый
+    type: doc
+    question: По какой форме электрорадиоизделия выдаются в производство?
+    must_include: ["М-11"]
+    source: {doc: RI-DP-03_khranenie_eri, clause: "3.1"}
+
+  # ===== Расширение: перефразировки основных вопросов =====
+  - id: P01
+    group: перефразировка
+    type: doc
+    question: Сколько рабочих дней даётся на проверку поступивших электрорадиоизделий?
+    must_include: ["5 рабочих дней"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "3.2"}
+  - id: P02
+    group: перефразировка
+    type: doc
+    question: Сколько действует наряд-допуск и сколько раз его можно продлевать?
+    must_include: ["15", "1 раз"]
+    source: {doc: ot_electro_903n, clause: "6.3"}
+  - id: P03
+    group: перефразировка
+    type: doc
+    question: Куда звонить, если оборудование задымилось?
+    must_include: ["2211|01|112"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "3"}
+  - id: P04
+    group: перефразировка
+    type: doc
+    question: Какой отступ первой строки абзаца нужен по ГОСТ Р 7.0.97?
+    must_include: ["1,25"]
+    source: {doc: gost_r_7_0_97_2016, clause: "3.4"}
+  - id: P05
+    group: перефразировка
+    type: doc
+    question: Какое сопротивление должно быть у исправного антистатического браслета?
+    must_include: ["0,75", "10"]
+    source: {doc: RI-DP-03_khranenie_eri, clause: "4.3"}
+
+  # ===== Расширение: опечатки и разговорный ввод =====
+  - id: T01
+    group: опечатки
+    type: doc
+    question: скока дней длится входной контроль эри
+    must_include: ["5 рабочих дней"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "3.2"}
+  - id: T02
+    group: опечатки
+    type: doc
+    question: сколко часов можно хранить вскрытые микросхмы msl3
+    must_include: ["168"]
+    source: {doc: RI-DP-03_khranenie_eri, clause: "2.3"}
+  - id: T03
+    group: опечатки
+    type: doc
+    question: какие поля у документа по госту 7.0.97
+    must_include: ["20 мм", "10 мм"]
+    source: {doc: gost_r_7_0_97_2016, clause: "6.1"}
+  - id: T04
+    group: опечатки
+    type: doc
+    question: при какой темпиратуре воздуха в помещении можно работать с паяльной станцией магистр
+    note: "Уточнено: в первой версии вопрос допускал и прочтение «температура жала»."
+    must_include: ["15", "35"]
+    source: {doc: solder_magistr_c20, clause: "2.1"}
+  - id: T05
+    group: опечатки
+    type: doc
+    question: на скока выдают наряд допуск
+    must_include: ["15 календарных дней"]
+    source: {doc: ot_electro_903n, clause: "6.3"}
+
+  # ===== Расширение: ответа в документах нет =====
+  - id: Q21
+    group: новый
+    type: none
+    question: Как часто проводится повторный инструктаж по охране труда для монтажников?
+  - id: Q22
+    group: новый
+    type: none
+    question: Какой гарантийный срок на ремонт, выполненный ремонтной службой предприятия?
+  - id: Q23
+    group: новый
+    type: none
+    question: Сколько лет хранится журнал входного контроля?
+  - id: Q24
+    group: новый
+    type: none
+    question: Как часто стирают спецодежду работникам участка пайки?
+
+  # ===== Расширение: учётная база =====
+  - id: D06
+    group: новый
+    type: db
+    question: Когда очередная поверка мультиметра СИ-0011?
+    must_include: ["2026-11-12|12.11.2026|12 ноября"]
+  - id: D07
+    group: новый
+    type: db
+    question: Какое оборудование законсервировано?
+    must_include: ["ОБ-0302|Вибростенд"]
+  - id: D08
+    group: новый
+    type: db
+    question: Кто подавал заявку на ремонт ванны ультразвуковой отмывки?
+    must_include: ["Захаров"]

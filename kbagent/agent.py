@@ -15,15 +15,16 @@ ROUTER_PROMPT = """Определи, где искать ответ на воп�
 ДАННЫЕ — текущие записи учёта предприятия: какое оборудование сейчас в ремонте, заявки на ремонт, остатки и партии на складе, даты поверки конкретных экземпляров приборов по инвентарным номерам, количества.
 
 Примеры:
-Какой срок входного контроля для ЭРИ? — ДОКУМЕНТЫ
-Что делать, если оборудование искрит? — ДОКУМЕНТЫ
-По какому телефону сообщить об аварии? — ДОКУМЕНТЫ
-Какой предохранитель стоит в мультиметре? — ДОКУМЕНТЫ
-Можно ли пользоваться прибором с истёкшей поверкой? — ДОКУМЕНТЫ
-Какое оборудование сейчас в ремонте? — ДАННЫЕ
-Когда очередная поверка осциллографа СИ-0012? — ДАННЫЕ
-Сколько резисторов 10 кОм годно к выдаче? — ДАННЫЕ
-Какие заявки на ремонт открыты? — ДАННЫЕ
+Как оформить акт о несоответствии? — ДОКУМЕНТЫ
+Кому сообщить о неисправности инструмента? — ДОКУМЕНТЫ
+Какое напряжение питания у паяльной станции? — ДОКУМЕНТЫ
+Можно ли работать с ЭРИ без антистатического браслета? — ДОКУМЕНТЫ
+Какие требования к оформлению приказа? — ДОКУМЕНТЫ
+Какие станки сейчас не работают? — ДАННЫЕ
+Когда поверять штангенциркуль СИ-0018? — ДАННЫЕ
+Сколько припоя осталось на складе? — ДАННЫЕ
+Какие партии поступили на склад на этой неделе и какой у них статус? — ДАННЫЕ
+Какие заявки на ремонт ещё не выполнены? — ДАННЫЕ
 
 Ответь одним словом: ДОКУМЕНТЫ или ДАННЫЕ.
 {question} —"""
@@ -62,7 +63,8 @@ class Agent:
     def ask(self, question: str, role: str = "Администратор", route: str = "auto") -> AgentResult:
         t0 = time.time()
         allowed = settings.roles.get(role, {"all"})
-        if route == "auto":
+        auto = route == "auto"
+        if auto:
             route = self.route(question)
 
         result = db_result = None
@@ -82,7 +84,13 @@ class Agent:
                         "cited": n in a.cited, "score": round(h.score, 3)}
                        for n, h in enumerate(a.hits, 1)]
             result = AgentResult(question, role, route, a.status, a.text, sources=sources, stats=a.stats)
-            if not result.answered and db_result and db_result.status == "answer":
+            if auto and db_result is None and a.status == "no_data":
+                # в документах нет ничего даже отдалённо похожего — второй шанс: учётная база
+                b = answer_from_database(question, settings.db_path)
+                if b.status == "answer" and b.rows:
+                    result = AgentResult(question, role, "database", b.status, b.text, sql=b.sql,
+                                         columns=b.columns, rows=b.rows, stats=b.stats)
+            elif not result.answered and db_result and db_result.status == "answer":
                 result = db_result   # «записей нет» из базы — тоже ответ (например, «на складе таких нет»)
 
         result.seconds = round(time.time() - t0, 2)

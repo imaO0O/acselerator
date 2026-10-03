@@ -78,7 +78,7 @@ def render_source(s: dict, key: str) -> None:
 def render_answer(r: dict, key: str = "x") -> None:
     kind, label = STATUS_VIEW.get(r["status"], ("info", r["status"]))
     getattr(st, kind)(label)
-    text = re.sub(r"\[(\d+)\]", r"**[\1]**", r["text"]).replace("[БД]", "**[БД]**")
+    text = re.sub(r"(\[\d+(?:\s*[,–-]\s*\d+)*\])", r"**\1**", r["text"]).replace("[БД]", "**[БД]**")
     st.markdown(text)
 
     if r["route"] == "database" and r.get("sql"):
