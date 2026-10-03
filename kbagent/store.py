@@ -129,17 +129,21 @@ class Index:
 
     # ---------- поиск ----------
 
-    def _mask(self, allowed: set[str]) -> np.ndarray:
-        return np.isin(self.access, list(allowed))
+    def _mask(self, allowed: set[str], docs: set[str] | None = None) -> np.ndarray:
+        mask = np.isin(self.access, list(allowed))
+        if docs:                                   # вопрос называет документ — ищем только в нём
+            mask &= np.isin(np.array([c.doc_id for c in self.chunks]), list(docs))
+        return mask
 
-    def search_words(self, query: str, allowed: set[str], k: int) -> list[tuple[int, float]]:
+    def search_words(self, query: str, allowed: set[str], k: int, docs: set[str] | None = None) -> list[tuple[int, float]]:
         s = self.bm25.scores(tokenize(query))
-        s[~self._mask(allowed)] = 0
+        s[~self._mask(allowed, docs)] = 0
         top = np.argsort(-s)[:k]
         return [(int(i), float(s[i])) for i in top if s[i] > 0]
 
-    def search_meaning(self, query_vector: np.ndarray, allowed: set[str], k: int) -> list[tuple[int, float]]:
+    def search_meaning(self, query_vector: np.ndarray, allowed: set[str], k: int,
+                       docs: set[str] | None = None) -> list[tuple[int, float]]:
         s = self.vectors @ query_vector
-        s[~self._mask(allowed)] = -1
+        s[~self._mask(allowed, docs)] = -1
         top = np.argsort(-s)[:k]
         return [(int(i), float(s[i])) for i in top]

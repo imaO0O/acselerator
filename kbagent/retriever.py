@@ -14,7 +14,7 @@ from .ingest import Chunk
 from .store import Index
 
 RRF_K = 60
-RERANK_POOL = 20
+RERANK_POOL = 30          # кандидатов на переранжирование: при 20 терялись нужные пункты («кто выдаёт наряд» — п. 5.3)
 
 
 @dataclass
@@ -34,10 +34,11 @@ class Retrieval:
     scored_by: str            # "reranker" или "embeddings"
 
 
-def retrieve(index: Index, question: str, allowed: set[str]) -> Retrieval:
-    words = index.search_words(question, allowed, settings.candidates)
+def retrieve(index: Index, question: str, allowed: set[str], docs: set[str] | None = None) -> Retrieval:
+    """docs — искать только в этих документах (вопрос называет документ: «по ГОСТ 7.0.97», «у MAS830L»)."""
+    words = index.search_words(question, allowed, settings.candidates, docs)
     qvec = llm.embed([question])[0]
-    meaning = index.search_meaning(qvec, allowed, settings.candidates)
+    meaning = index.search_meaning(qvec, allowed, settings.candidates, docs)
 
     fused: dict[int, float] = {}
     rank_w = {i: r for r, (i, _) in enumerate(words)}

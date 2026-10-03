@@ -457,3 +457,64 @@ questions:
     question: Какие средства измерений нужно поверить в ближайшие 90 дней?
     must_include: ["СИ-0011", "СИ-0014", "СИ-0015", "СИ-0020"]
     must_exclude: ["СИ-0018"]
+
+  # ===== Ловушки-3: вопросы «как на защите», разбор 04.10.2026 (вопросов нет в подсказках модели) =====
+  - id: K01
+    group: ловушки-3
+    type: info
+    question: Привет
+  - id: K02
+    group: ловушки-3
+    type: info
+    question: Что ты умеешь?
+  - id: K03
+    group: ловушки-3
+    type: info
+    question: Откуда ты берёшь ответы?
+  - id: K04
+    group: ловушки-3
+    type: doc
+    question: Кто может выдавать наряд-допуск?
+    must_include: ["административно-технического", "V"]
+    source: {doc: ot_electro_903n, clause: "5.3"}
+    note: нужный пункт был разрезан посреди слова и не попадал в выдачу
+  - id: K05
+    group: ловушки-3
+    type: doc
+    question: Чем отличаются отказы категорий А, Б и В и как быстро на них реагирует ремонтная служба?
+    must_include: ["угроз", "остановк", "частичн", "15 минут", "1 час"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}
+    note: составной вопрос — нужны обе части
+  - id: K06
+    group: ловушки-3
+    type: both
+    question: Ванна ОБ-0202 сломалась ночью — кому звонить?
+    must_include: ["2215", "в ремонте"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "7.2"}
+  - id: K07
+    group: ловушки-3
+    type: db
+    question: Когда следующая поверка у штангенциркуля?
+    must_include: ["date:2027-01-20"]
+    must_exclude: ["СИ-0020"]
+  - id: K08
+    group: ловушки-3
+    type: db
+    question: Сколько всего средств измерений числится и сколько из них не поверено?
+    must_include: ["10", "2"]
+    must_exclude: ["|"]
+  - id: K09
+    group: ловушки-3
+    type: db
+    question: Какие материалы есть на складе?
+    must_include: ["ПОС-61", "Флюс"]
+  - id: K10
+    group: ловушки-3
+    type: none
+    question: Сколько стоит мультиметр TDM?
+  - id: K11
+    group: ловушки-3
+    type: both
+    question: Микроконтроллеры ЭРИ-1005 можно отдавать на участок?
+    must_include: ["годен"]
+    source: {doc: [STP-DP-01_vkhodnoj_kontrol, RI-DP-03_khranenie_eri]}

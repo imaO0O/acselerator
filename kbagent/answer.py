@@ -184,13 +184,23 @@ VERIFY_PROMPT = """Проверь ответ помощника по докум�
 
 
 # Условия, требования для которых легко перепутать: «категория А/Б/В», «класс 1/2», «уровень MSL 3».
+# Значение может быть списком: «категорий А, Б и В», «классов 1 или 2» — берутся все значения списка.
 QUALIFIERS = [
-    re.compile(r"категори\w*\s+«?([АБВГД])»?(?![а-яё])", re.I),
-    re.compile(r"класс\w*\s+«?([А-ЯA-Z0-9]{1,3})»?(?![а-яё])", re.I),
-    re.compile(r"уровн\w*\s+(?:MSL\s*)?(\d)", re.I),
+    re.compile(r"категори\w*\s+((?:«?[АБВГД]»?(?![а-яё])(?:\s*,\s*|\s+и\s+|\s+или\s+)?)+)", re.I),
+    re.compile(r"класс\w*\s+((?:«?[А-ЯA-Z0-9]{1,3}»?(?![а-яё])(?:\s*,\s*|\s+и\s+|\s+или\s+)?)+)", re.I),
+    re.compile(r"уровн\w*\s+(?:MSL\s*)?((?:\d(?:\s*,\s*|\s+и\s+|\s+или\s+)?)+)", re.I),
 ]
+VALUE_RE = re.compile(r"[А-ЯA-Z0-9]{1,3}")
+
+
 def _qualifiers(text: str) -> dict[int, set[str]]:
-    return {k: {m.upper() for m in rx.findall(text)} for k, rx in enumerate(QUALIFIERS) if rx.search(text)}
+    out = {}
+    for k, rx in enumerate(QUALIFIERS):
+        values = {v.upper() for group in rx.findall(text) for v in VALUE_RE.findall(group.upper())
+                  if v.upper() not in {"И", "ИЛИ"}}
+        if values:
+            out[k] = values
+    return out
 
 
 def _drop_other_cases(question: str, text: str, hits: list[Hit]) -> tuple[str, int]:
@@ -234,7 +244,8 @@ def verify(question: str, text: str, hits: list[Hit], cited: list[int]) -> bool:
 
 REFUSAL_RE = re.compile(
     r"(?:нет|не содерж\w*|отсутству\w*)\s+(?:\w+\s+){0,2}(?:информаци\w*|сведени\w*)|"
-    r"(?:во|в)\s+(?:предоставленных\s+|найденных\s+)?фрагментах\s+(?:нет|не\s)|"
+    r"(?:во|в)\s+(?:предоставленных\s+|найденных\s+|приведённых\s+|приведенных\s+)?фрагментах\s+(?:нет|не\s)|"
+    r"\b(?:не|нет)\b[^.!?\n]{0,60}\b(?:во|в)\s+(?:предоставленных\s+|найденных\s+)?фрагментах|"
     r"не указан\w*\s+(?:во|в)\s+(?:фрагмент|документ)", re.I)
 
 
@@ -249,20 +260,26 @@ def _too_short(text: str) -> bool:
     return NO_DATA not in text and len(bare) < 12
 
 
-def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None = None) -> Answer:
-    """facts — ответ по учётной базе для вопросов «запись учёта + правило» (маршрут «оба источника»)."""
+def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None = None,
+                          parts: list[str] | None = None) -> Answer:
+    """facts — ответ по учётной базе для вопросов «запись учёта + правило» (маршрут «оба источника»);
+    parts — части составного вопроса: модель отвечает на каждую."""
     hits = retrieval.hits
     stats = {"best_score": round(retrieval.best_score, 3), "scored_by": retrieval.scored_by}
     if not retrieval.confident:
         return Answer("no_data", "В доступных документах ответа не нашёл.", hits=hits, stats=stats)
 
     db_block = (f"Состояние записи в учётной базе: {facts.replace('[БД]', '').strip()}\n\n" if facts else "")
+    shown = question
+    if parts and len(parts) > 1:
+        shown = (f"{question}\n(Вопрос из нескольких частей — ответь на каждую: "
+                 + "; ".join(f"{k}) {p}" for k, p in enumerate(parts, 1)) + ".)")
     db_rule = (" Запись из учётной базы будет показана сотруднику отдельно — не пересказывай её и не додумывай "
                "сведений о ней. Не делай вывода «можно» или «нельзя» о самой записи и не начинай ответ с «Да» "
                "или «Нет»: приведи требования документов, которые относятся к записи в таком состоянии." if facts else "")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Фрагменты документов:\n\n{_context(hits)}\n\n{db_block}Вопрос: {question}\n\n"
+        {"role": "user", "content": f"Фрагменты документов:\n\n{_context(hits)}\n\n{db_block}Вопрос: {shown}\n\n"
                                     "Ответь по существу: приведи конкретные сведения из фрагментов (сроки, числа, "
                                     f"действия, требования) со ссылками [n].{db_rule} "
                                     f"Если ответа во фрагментах нет — {NO_DATA}."},
@@ -323,6 +340,10 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
         # «Что делать при искрении?» → «Нет. При искрении…»: правило о неверной посылке сработало
         # на вопросе, который не предполагает ответа «да/нет», — убираем лишнее «Нет»
         text = re.sub(r"^\s*Нет\b[.,!]?\s*", "", text)
+    # «наряд- допуск» — огрех генерации; «аудио- или видео-» — правильное написание, его не трогаем
+    text = re.sub(r"(?<=[а-яё])- (?!(?:или|и|либо)\b)(?=[а-яё])", "-", text)
+    if len(re.findall(r"(?m)^\s*\d+[.)]\s", text)) == 1:
+        text = re.sub(r"(?m)^(\s*)1[.)]\s+", r"\1", text)      # список из одного пункта — без «1.»
     if facts:
         # вердикт по конкретной записи модель делает ненадёжно — оставляем только требования документов
         text = re.sub(r"^\s*(?:Да|Нет)[.,!]\s*", "", text)

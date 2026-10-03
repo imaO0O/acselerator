@@ -78,6 +78,7 @@ ANSWER_PROMPT = """Ответь на вопрос сотрудника ТОЛЬ�
 Для каждой записи приведи номер, наименование и значения, которые отвечают на вопрос (даты, количество, статус).
 Если записей несколько — оформи маркированным списком, по одной записи в строке.
 Называй поля так, как они подписаны в заголовке результата.
+Пиши полными фразами, не копируй таблицу и разделитель «|». Числа бери только из результата, ничего не складывай.
 Числа, даты, номера и ФИО переписывай точно. Если результат пустой — так и скажи, что записей нет.
 Если в вопросе предмет назван не так, как в записи (например, спрашивают про мультиметр, а в записи осциллограф), прямо укажи, как он записан в базе.
 Если вопрос не о записях учёта (например, о правилах, сроках или порядке действий по регламенту) или строки результата на него не отвечают — ответь ровно одним словом: НЕТ_ДАННЫХ.
@@ -88,8 +89,12 @@ ANSWER_PROMPT = """Ответь на вопрос сотрудника ТОЛЬ�
 Результат запроса ({count} строк):
 {table}"""
 
-NOT_RECORDS_RE = re.compile(r"стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|оплат|зарплат|можно ли|нужно ли|"
-                            r"что делать|порядок|как оформить|кто должен", re.I)
+NOT_RECORDS_RE = re.compile(r"стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|оплат|зарплат|можно\b|\bнужно\b|"
+                            r"\bнадо\b|следует|должн|что делать|порядок|как оформить", re.I)
+
+# где искать похожие записи: наименования, модели, ФИО, места и статусы
+NEAR_COLUMNS = ("name", "model", "responsible", "applicant", "location", "inspection_status", "status")
+OBJECT_COLUMNS = ("name", "model", "responsible", "applicant")
 
 # поля с наименованиями и ФИО: модель пишет «= 'Белов'», а в базе «Белов И. Н.»
 FUZZY_COLUMNS = ("name", "responsible", "applicant", "location", "description", "model")
@@ -193,7 +198,8 @@ def _labels(sql: str, columns: list) -> list[str]:
     return out
 
 
-GENERIC_WORDS = "сколько где какой какие есть остаток осталось склад лежит хранится находится номер запись отвечает"
+GENERIC_WORDS = ("сколько где какой какие есть остаток осталось склад лежит хранится находится номер запись "
+                 "отвечает сейчас числится имеется когда следующий")
 
 
 def _near_terms(question: str) -> list[str]:
@@ -208,11 +214,11 @@ def _near_terms(question: str) -> list[str]:
 
 
 def _near_matches(db_path: Path, question: str) -> list[tuple[str, list, list, dict]]:
-    """Записи, в наименованиях, ФИО и местах которых встречаются слова вопроса; лучшие — по числу совпавших слов."""
+    """Записи, в наименованиях, ФИО, местах и статусах которых встречаются слова вопроса."""
     terms = _near_terms(question)
     found = []
     for t in SCHEMA["tables"]:
-        cols = [c for c in t["columns"] if c in FUZZY_COLUMNS]
+        cols = [c for c in t["columns"] if c in NEAR_COLUMNS]
         if not cols or not terms:
             continue
         cond = " OR ".join(f"lower({c}) LIKE ?" for c in cols for _ in terms)
@@ -223,6 +229,14 @@ def _near_matches(db_path: Path, question: str) -> list[tuple[str, list, list, d
                 f"lower({c}) LIKE '%{w}%'" for c in cols for w in terms)
             found.append((shown, columns, rows, t))
     return found
+
+
+def _word_hits(terms: list[str], text: str) -> set[str]:
+    """Слова вопроса, с которых начинается слово записи и которые покрывают его почти целиком:
+    «припо» — «Припой», «карантин» — «карантина»; но не «контрол» — «Микроконтроллер»
+    и не «повер» — «поверхностного»."""
+    words = re.findall(r"[а-яёa-z0-9]+", text.lower().replace("ё", "е"))
+    return {w for w in terms for word in words if word.startswith(w.replace("ё", "е")) and len(word) <= len(w) + 4}
 
 
 def _check(sql: str) -> None:
@@ -244,20 +258,26 @@ def _like(pattern, value, escape=None):
 NUMBER_RE = re.compile(r"\d[\d.,:/-]*\d|\d")
 
 
-def _numbers_supported(text: str, rows: list, question: str) -> bool:
-    """Все числа ответа (даты, количества, номера) должны быть в результате запроса или в вопросе.
-    Так ловятся выдумки вроде «ремонтный срок: в течение 14 дней», когда в записях такого поля нет."""
+def _unsupported_numbers(text: str, rows: list, question: str) -> list[str]:
+    """Числа ответа (даты, количества, номера), которых нет ни в результате запроса, ни в вопросе.
+    Так ловятся выдумки вроде «ремонтный срок: в течение 14 дней» или «20 кг припоя» при 12 кг в записи."""
     norm = lambda n: n.strip(".,:/-").lstrip("0") or "0"  # noqa: E731
     whole = {norm(n) for v in [question, *(x for r in rows for x in r)] for n in NUMBER_RE.findall(str(v))}
     parts = {norm(p) for n in whole for p in re.split(r"[.,:/-]", n) if p}   # «2026-09-28» → 2026, 9, 28
-    for n in NUMBER_RE.findall(re.sub(r"\[БД\]", "", text)):
+    body = re.sub(r"(?m)^\s*\d+[.)]\s", "", re.sub(r"\[БД\]", "", text))     # номера пунктов списка — не данные
+    bad = []
+    for n in NUMBER_RE.findall(body):
         pieces = [norm(p) for p in re.split(r"[.,:/-]", n.strip(".,:/-")) if p]
         if len(pieces) > 1:                       # дата или время в другом написании: «25.09.2026»
             if not all(p in parts or p in whole for p in pieces):
-                return False
+                bad.append(n)
         elif norm(n) not in whole and not (norm(n).isdigit() and int(norm(n)) <= max(len(rows), 1)):
-            return False                          # номера пунктов списка и число записей допустимы
-    return True
+            bad.append(n)                         # число записей допустимо
+    return bad
+
+
+def _numbers_supported(text: str, rows: list, question: str) -> bool:
+    return not _unsupported_numbers(text, rows, question)
 
 
 def _end_of_month() -> str:
@@ -347,26 +367,27 @@ def _answer_near(question: str, db_path: Path, stats: dict) -> "DbAnswer | None"
     scored = []
     for _, cols, rows, t in found:
         for row in rows:
-            words = " ".join(str(v) for c, v in zip(cols, row) if c in FUZZY_COLUMNS).lower().replace("ё", "е")
-            # слово вопроса засчитывается, только если с него начинается слово записи:
-            # «контрол» в «Микроконтроллер» — случайное совпадение, а не ответ
-            matched = [w for w in terms if re.search(rf"(?<![а-яa-z0-9]){re.escape(w.replace('ё', 'е'))}", words)]
-            if not matched:
-                continue
-            record = " ".join(str(v) for v in row).lower().replace("ё", "е").replace(" ", "")
-            exact = len(matched) == len(terms) and all(c.replace("ё", "е") in record for c in codes)
-            pairs = "; ".join(f"{_ru(t, c)} — {v}" for c, v in zip(cols, row)
-                              if v not in (None, "") and c in RECORD_FIELDS)
-            scored.append((len(matched), exact, f"- {pairs}", row, cols, t))
+            # совпадение в наименовании, модели, ФИО — это сам предмет вопроса; в месте или статусе — признак
+            obj = _word_hits(terms, " ".join(str(v) for c, v in zip(cols, row) if c in OBJECT_COLUMNS))
+            attr = _word_hits(terms, " ".join(str(v) for c, v in zip(cols, row) if c in NEAR_COLUMNS)) - obj
+            if obj or attr:
+                scored.append(((len(obj), len(attr)), obj | attr, obj, row, cols, t))
     if not scored:
         return None
-    scored.sort(key=lambda x: -x[0])
-    best = scored[0][0]
-    scored = [s for s in scored if s[0] == best]          # только записи с наибольшим числом совпавших слов
-    exact = any(s[1] for s in scored)
+    best = max(s[0] for s in scored)
+    known_obj = set().union(*(s[2] for s in scored))      # какие предметы вопроса вообще есть в учёте
+    known = set().union(*(s[1] for s in scored))
+    scored = [s for s in scored if s[0] == best]          # «штангенциркуль» важнее «поверки» в статусе
+    lines, exact = [], False
+    for _, matched, obj, row, cols, t in scored:
+        record = " ".join(str(v) for v in row).lower().replace("ё", "е").replace(" ", "")
+        found_all = obj == known_obj if known_obj else matched == known
+        exact = exact or (found_all and all(c.replace("ё", "е") in record for c in codes))
+        pairs = "; ".join(f"{_ru(t, c)} — {v}" for c, v in zip(cols, row) if v not in (None, "") and c in RECORD_FIELDS)
+        lines.append(f"- {pairs}")
     lead = "Найдено в учёте:" if exact else "Точного совпадения в учёте нет. Похожие записи:"
-    text = lead + "\n" + "\n".join(s[2] for s in scored[:10]) + " [БД]"
-    cols, t = scored[0][4], scored[0][5]
+    text = lead + "\n" + "\n".join(lines[:10]) + " [БД]"
+    t, cols = scored[0][5], scored[0][4]
     rows = [s[3] for s in scored if s[5] is t]
     return DbAnswer("answer", text, sql="\n".join(q for q, _, _, _ in found), columns=cols,
                     rows=[list(r) for r in rows], stats=stats, labels=[_ru(t, c) for c in cols])
@@ -412,9 +433,8 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
 
     # похожие записи — только если модель искала запись по наименованию, ФИО или месту и не нашла;
     # на вопросах «до конца года» поиск по словам ловит случайные совпадения («повер» в «поверхностного»)
-    name_search = re.search(r"lower\(\s*(?:\w+\.)?(?:%s)\s*\)\s+like" % "|".join(FUZZY_COLUMNS), sql, re.I)
     # о ценах, правилах и порядке действий в учёте нет записей — похожие записи тут не ответ
-    if not rows and near and name_search and not NOT_RECORDS_RE.search(question):
+    if not rows and near and not NOT_RECORDS_RE.search(question):
         try:
             near_answer = _answer_near(question, db_path, stats)
         except (sqlite3.Error, llm.ModelError):
@@ -428,10 +448,20 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
     if "НЕТ_ДАННЫХ" in text:
         return DbAnswer("no_data", "Записи учёта не отвечают на этот вопрос.", sql=sql, columns=columns,
                         rows=[list(r) for r in rows], stats=stats)
-    if not _numbers_supported(text, rows, question):
-        stats["unsupported_numbers"] = True
-        return DbAnswer("no_data", "Ответ по учётной базе не подтвердился записями.", sql=sql, columns=columns,
-                        rows=[list(r) for r in rows], stats=stats)
+    bad = _unsupported_numbers(text, rows, question)
+    if bad:
+        # одна попытка исправиться: модель видит, каких чисел нет в записях
+        messages = [{"role": "user", "content": ANSWER_PROMPT.format(question=question, count=len(rows),
+                                                                      table=_table(labels, rows))},
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": f"В ответе есть числа, которых нет в результате запроса: "
+                                                f"{', '.join(bad)}. Перепиши ответ, используя только значения "
+                                                "из таблицы, ничего не складывая и не придумывая."}]
+        text, _ = llm.chat(messages, max_tokens=400)
+        if _unsupported_numbers(text, rows, question) or "НЕТ_ДАННЫХ" in text:
+            stats["unsupported_numbers"] = True
+            return DbAnswer("no_data", "Ответ по учётной базе не подтвердился записями.", sql=sql, columns=columns,
+                            rows=[list(r) for r in rows], stats=stats)
     text = re.sub(r"[ \t]+([.,;:])", r"\1", re.sub(r"\s*\[БД\]\s*", " ", text)).strip() + " [БД]"
     return DbAnswer("answer", text, sql=sql, columns=columns, rows=[list(r) for r in rows], stats=stats,
                     labels=labels)

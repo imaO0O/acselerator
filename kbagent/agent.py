@@ -57,9 +57,11 @@ CLARIFY_PROMPT = """Вопрос сотрудника слишком общий:
 # инвентарный, номенклатурный номер или номер партии
 RECORD_RE = re.compile(r"\b(?:СИ|ОБ|ЭРИ|КИ|МТ|П)-\d{3,4}(?:-\d{2})?\b", re.I)
 # вопрос о правиле: что делать, можно ли, кто должен… — вместе с номером записи даёт маршрут «оба источника»
-RULE_RE = re.compile(r"можно ли|нужно ли|надо ли|требуется ли|положено ли|разрешается|допускается|запрещ|"
+RULE_RE = re.compile(r"можно ли|можно\b|нужно ли|надо ли|требуется ли|положено ли|разрешается|допускается|запрещ|"
+                     r"кому (?:звонить|сообщ\w*|обращаться|докладывать)|куда (?:звонить|сообщ\w*|обращаться)|"
                      r"в какой срок|в течение какого|за какое время|в каком порядке|длится|"
                      r"сколько стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|"
+                     r"сколько\s[^?]*\b(?:нужно|надо|следует|требуется)\b|"     # «сколько штук нужно осмотреть» — расчёт по правилу
                      r"(?:сколько|скока|скоко|сколко)\s+(?:дней|часов|минут|суток|недель|месяцев|лет)\b|"
                      r"что (?:делать|нужно|необходимо|требуется)|как (?:быть|поступить|оформить|действовать)|"
                      r"порядок|кто (?:должен|подписывает|оформляет|утверждает|отвечает|принимает)|обязан|"
@@ -77,6 +79,73 @@ DOCS_Q_RE = re.compile(
 SUMMARY_Q_RE = re.compile(
     r"\bо ч[её]м\b|кратк\w* содержани|кратко (?:опиши|перескажи|расскажи)|что за документ|"
     r"что (?:содержит|описывает|устанавливает|регулирует)|для чего (?:нужен|предназначен)", re.I)
+# Разговорные реплики и вопросы о самом агенте: отвечаем справкой, а не поиском по документам
+GREETING_RE = re.compile(r"^\s*(?:привет\w*|здравствуй\w*|добр\w+\s+(?:день|утро|вечер)|доброе утро|hello|hi|хай)"
+                         r"[\s!.,)]*$", re.I)
+THANKS_RE = re.compile(r"^\s*(?:спасибо|благодарю|спс|понятно|ясно|ок|окей|хорошо)[\s!.,)]*(?:большое)?[\s!.,)]*$",
+                       re.I)
+HELP_RE = re.compile(r"что (?:ты )?(?:умеешь|можешь)|кто ты|ты кто|как (?:тобой|с тобой) (?:пользоваться|работать)|"
+                     r"^\s*(?:помощь|справка|help)\s*\??\s*$", re.I)
+ABOUT_RE = re.compile(r"откуда (?:ты )?(?:бер[её]шь|зна[её]шь|ответ|информаци|данные)|на ч[её]м (?:ты )?основ|"
+                      r"как ты (?:работаешь|находишь|отвечаешь)|можно (?:ли )?тебе доверять|ты (?:не )?выдумываешь",
+                      re.I)
+EXAMPLES = ["Что делать при искрении оборудования?", "На какой срок выдаётся наряд-допуск?",
+            "Можно ли выдать в производство партию П-2609-04?", "Какие документы есть про паяльные станции?"]
+ABOUT_TEXT = ("Я отвечаю только по документам предприятия, доступным вашей роли, и по учётной базе — "
+              "без интернета и без собственных знаний модели.\n\n"
+              "1. По вопросу ищу подходящие пункты документов — по словам и по смыслу — и оцениваю, отвечают ли они на вопрос.\n"
+              "2. Ответ составляю только из найденных пунктов; каждое утверждение — со ссылкой [n] на документ, пункт и "
+              "страницу. Нажмите на источник, чтобы увидеть фрагмент в оригинале.\n"
+              "3. Ответ без подтверждённой ссылки не показываю. Если ответа в документах нет — так и говорю.\n"
+              "4. Вопросы по учёту (оборудование, приборы, склад, заявки) — запрос к учётной базе только на чтение; "
+              "записи показываю таблицей.")
+
+
+PART_SPLIT_RE = re.compile(
+    r"\s*[,;]?\s+и\s+(?=(?:как|что|кто|какой|какая|какое|какие|каким|где|когда|сколько|куда|кому|чем|почему|зачем|"
+    r"в какой|на какой|в течение|за какое)\b)|\?\s+(?=\S)", re.I)
+
+
+# Как вопрос называет документ → как это записано в названии документа
+DOC_CODES = [
+    (re.compile(r"гост\w*\s*(?:р\s*)?(\d+(?:\.\d+)+)", re.I), lambda v: rf"гост[^,«]*?\b{re.escape(v)}\b"),
+    (re.compile(r"\b(стп|ри)\s*дп[-\s]*(\d{1,2})\b", re.I), lambda kv: rf"\b{kv[0].lower()}\s*дп-?0?{int(kv[1])}\b"),
+    (re.compile(r"\b(\d{3})\s*н\b", re.I), lambda v: rf"\b{v}н\b"),
+    (re.compile(r"\bакип[-\s]*(\d{4})", re.I), lambda v: rf"акип-{v}"),
+]
+MODEL_RE = re.compile(r"\b(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{3,}\b")       # MAS830L, SBK936B, TDM, Lukey
+
+
+def named_docs(question: str, cards: dict[str, dict]) -> set[str]:
+    """Документы, которые вопрос называет прямо: «по ГОСТ 7.0.97», «СТП ДП-01», «у мультиметра MAS830L»."""
+    patterns = [make(m) for rx, make in DOC_CODES for m in rx.findall(question)]
+    patterns += [rf"(?<![a-z0-9]){re.escape(m.lower())}" for m in MODEL_RE.findall(question)
+                 if m.lower() not in {"and", "the", "what", "for", "how", "is"}]
+    if not patterns:
+        return set()
+    out = {doc_id for doc_id, card in cards.items()
+           if any(re.search(p, card["title"].lower().replace("ё", "е")) for p in patterns)}
+    return out if len(out) < len(cards) else set()
+
+
+def merge(base, extra, limit: int) -> None:
+    """Добавляет к найденному до `limit` новых уверенных фрагментов из другого поиска."""
+    seen = {h.chunk.id for h in base.hits}
+    new = [h for h in extra.hits if not h.neighbor and h.chunk.id not in seen
+           and h.score >= settings.rerank_threshold][:limit]
+    base.hits += new
+    if extra.best_score > base.best_score:
+        base.best_score, base.confident = extra.best_score, extra.confident
+
+
+def split_parts(question: str) -> list[str]:
+    """«Чем отличаются категории А, Б и В и как быстро на них реагируют?» → две части
+    («… А, Б и В» не делится: после «и» нет вопросительного слова)."""
+    parts = [p.strip(" ,;?") for p in PART_SPLIT_RE.split(question)]
+    parts = [p for p in parts if len(tokenize(p)) >= 2]
+    return parts if len(parts) > 1 else [question]
+
+
 def _load_glossary() -> dict[str, list[str]]:
     path = settings.raw_dir.parent / "glossary.yaml"
     if not path.exists():
@@ -245,6 +314,34 @@ class Agent:
         return (len(tokenize(question)) <= 2 and len(docs) >= 3
                 and settings.rerank_threshold <= retrieval.best_score < settings.confident_threshold)
 
+    # ---------- справка ----------
+
+    def small_talk(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
+        """Приветствие, «что ты умеешь», «откуда ответы», «спасибо», пустой ввод — справка с примерами."""
+        docs = sum(1 for c in self.cards.values() if c["access"] in allowed)
+        if GREETING_RE.match(question):
+            text = (f"Здравствуйте! Я отвечаю на вопросы по регламентам, инструкциям, ГОСТам и данным учёта "
+                    f"предприятия — со ссылкой на документ, пункт и страницу. Вам доступно документов: {docs}. "
+                    "Например:")
+        elif HELP_RE.search(question):
+            text = ("Я ищу ответы во внутренних документах предприятия и в учётной базе:\n\n"
+                    "- правила, сроки, порядок действий, требования — по регламентам, инструкциям, ГОСТам, "
+                    "руководствам к приборам;\n"
+                    "- оборудование, средства измерений, склад и заявки на ремонт — по учётной базе;\n"
+                    "- вопрос вроде «прибор СИ-0012 просрочен — можно ли им работать?» — сразу по записи учёта "
+                    "и требованию документа;\n"
+                    "- какие документы есть по теме и о чём документ.\n\n"
+                    f"Каждый ответ — со ссылкой на источник. Вам доступно документов: {docs}. Например:")
+        elif ABOUT_RE.search(question):
+            text = ABOUT_TEXT
+        elif THANKS_RE.match(question):
+            return AgentResult(question, role, "help", "info", "Пожалуйста! Если появятся вопросы — спрашивайте.")
+        elif not tokenize(question):
+            text = "Не понял вопрос. Спросите, например:"
+        else:
+            return None
+        return AgentResult(question, role, "help", "info", text, options=list(EXAMPLES))
+
     # ---------- ответ ----------
 
     def ask(self, question: str, role: str = "Администратор", route: str = "auto",
@@ -255,6 +352,12 @@ class Agent:
         if settings.db_path == demo_db.DB:
             demo_db.ensure_current()      # даты демо-базы — от сегодняшнего дня
         allowed = settings.roles.get(role, {"all"})
+
+        talk = self.small_talk(question, role, allowed)
+        if talk is not None:
+            talk.seconds = round(time.time() - t0, 2)
+            self._log(talk, user)
+            return talk
 
         asked = question
         if history and self.needs_context(question):
@@ -278,7 +381,8 @@ class Agent:
 
         if route in ("database", "both"):
             step("Запрос к учётной базе…")
-            records = [m.upper() for m in RECORD_RE.findall(asked)] if route == "both" else None
+            # номер записи в вопросе — запись ищется по номеру программно, без генерации SQL
+            records = [m.upper() for m in RECORD_RE.findall(asked)]
             # похожие записи ищем, только когда вопрос явно к базе (не для второго шанса после документов)
             a = a_db = answer_from_database(asked, settings.db_path, records=records or None,
                                             near=route == "database")
@@ -294,13 +398,29 @@ class Agent:
             step("Ищу в документах…")
             # для «запись + правило» ищем с учётом того, что это за запись и в каком она состоянии
             summary = a_db.summary if route == "both" and a_db is not None else ""
-            retrieval = retrieve(self.index, f"{asked} {summary}".strip(), allowed)
+            # вопрос называет документ («по ГОСТ 7.0.97», «у MAS830L») — сначала ищем в нём:
+            # иначе «поля документа» находятся в другом стандарте
+            docs = named_docs(asked, self.cards)
+            retrieval = retrieve(self.index, asked, allowed, docs or None)
+            if docs and not retrieval.confident:
+                retrieval = retrieve(self.index, asked, allowed)
+            if summary:
+                # и с состоянием записи: «партия П-2609-04» сама по себе не похожа на «ЭРИ, не прошедшие
+                # входной контроль», а «ЭРИ, карантин» — похожа; но длинное описание записи может перебить
+                # сам вопрос («кому звонить ночью»), поэтому найденное по обоим запросам объединяется
+                merge(retrieval, retrieve(self.index, f"{asked} {summary}", allowed), limit=3)
             if asked != question and history:
                 # уточнение в диалоге: ищем и вместе с темой предыдущего вопроса («отказ категории Б» +
                 # «ночная смена» → раздел о ночной смене), добавляем до двух новых фрагментов
                 extra = retrieve(self.index, f"{asked} {history[-1]['question']}", allowed)
                 seen = {h.chunk.id for h in retrieval.hits}
                 retrieval.hits += [h for h in extra.hits if not h.neighbor and h.chunk.id not in seen][:2]
+            parts = split_parts(asked)
+            if len(parts) > 1:
+                # составной вопрос («чем отличаются категории и как быстро реагируют») — ищем по каждой части,
+                # иначе поиск находит пункты только про одну из них
+                for part in parts:
+                    merge(retrieval, retrieve(self.index, part, allowed), limit=2)
             prev_docs = set((history or [{}])[-1].get("docs") or [])
             if (asked != question and not retrieval.confident and retrieval.hits
                     and retrieval.hits[0].chunk.doc_id in prev_docs
@@ -322,7 +442,7 @@ class Agent:
                     and db_result.status == "answer" else None
                 step(f"Найдено фрагментов: {len(retrieval.hits)}. Составляю ответ и проверяю ссылки…"
                      if retrieval.confident else "Подходящих фрагментов в документах нет")
-                a = answer_from_documents(asked, retrieval, facts=facts)
+                a = answer_from_documents(asked, retrieval, facts=facts, parts=parts)
                 result = AgentResult(question, role, route, a.status, a.text, sources=_sources(a), stats=a.stats)
                 if route == "both":
                     if a.answered and facts:

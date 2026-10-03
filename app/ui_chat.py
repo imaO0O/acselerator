@@ -212,13 +212,14 @@ def render_answer(item: dict, i: int) -> None:
     seconds = f"{item['seconds']:.1f}".replace(".", ",")
     left.caption(f"{ROUTE_LABELS.get(item['route'], '')} · {seconds} с")
     with mid:
-        if item["status"] != "error":
+        if item["status"] not in ("error", "info"):       # справку («что ты умеешь») не оцениваем
             if item.get("feedback") is None:
                 st.feedback("thumbs", key=f"fb-{uid}", on_change=_on_feedback, args=(i, f"fb-{uid}"))
             else:
                 st.caption("Оценка: " + ("👍" if item["feedback"] == 1 else "👎"))
-    right.download_button("Скачать", data=_answer_md(item), file_name=f"otvet-{i + 1}.md", mime="text/markdown",
-                          key=f"md-{uid}", icon=":material/download:", type="tertiary")
+    if item["status"] != "info":
+        right.download_button("Скачать", data=_answer_md(item), file_name=f"otvet-{i + 1}.md", mime="text/markdown",
+                              key=f"md-{uid}", icon=":material/download:", type="tertiary")
     if item.get("feedback") == 0 and not item.get("comment"):
         st.text_input("Что не так с ответом? (необязательно)", key=f"cm-{uid}", on_change=_on_comment,
                       args=(i, f"cm-{uid}"))
@@ -280,4 +281,6 @@ def chat_page() -> None:
                 "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
         items.append(item)
         _save()
+        if len(items) == 1:
+            st.rerun()             # первый вопрос нового диалога — сразу показать диалог в списке слева
         render_answer(item, len(items) - 1)

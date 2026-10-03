@@ -204,7 +204,15 @@ def _split_long(text: str) -> list[str]:
         parts.append(text[start:end].strip())
         if end >= len(text):
             break
-        start = max(end - OVERLAP, start + 1)
+        # перекрытие начинается с начала предложения (или хотя бы слова), а не с середины слова:
+        # иначе фрагмент начинается с «ники из числа…» и поиск его не узнаёт
+        back = max(end - OVERLAP, start + 1)
+        sentence = text.find(". ", back, end)
+        if sentence != -1:
+            start = sentence + 2
+        else:
+            space = text.find(" ", back, end)
+            start = space + 1 if space != -1 else back
     return parts
 
 
@@ -225,8 +233,14 @@ def _chunks(units: list[_Unit], meta: dict) -> list[Chunk]:
         base = dict(doc_id=meta["id"], doc_title=meta["title"], doc_kind=meta["kind"], access=meta["access"],
                     clause=clause, heading=group[0].heading,
                     page_start=min(pages) if pages else None, page_end=max(pages) if pages else None)
-        for piece in (_split_long(text) if len(text) > MAX_LEN else [text]):
-            chunks.append(Chunk(id=f"{meta['id']}#{len(chunks)}", text=piece, **base))
+        pieces = _split_long(text) if len(text) > MAX_LEN else [text]
+        opening = re.sub(r"^\s*\d{1,3}(?:\.\d{1,3})*\.?\s+", "", pieces[0])        # без номера пункта
+        lead = re.split(r"(?<=[.;:])\s", opening, maxsplit=1)[0][:200]
+        for k, piece in enumerate(pieces):
+            # продолжение длинного пункта получает в заголовок его начало: иначе фрагмент «из числа
+            # административно-технического персонала…» не говорит, о чём он, и поиск его не узнаёт
+            heading = base["heading"] if k == 0 else f"{base['heading'] or ''} — продолжение: {lead}".strip(" —")
+            chunks.append(Chunk(id=f"{meta['id']}#{len(chunks)}", text=piece, **{**base, "heading": heading}))
 
     # Пункты одного раздела объединяются, пока фрагмент не превысит целевой размер:
     # короткий раздел («2 Классификация отказов» из четырёх пунктов) остаётся целым.

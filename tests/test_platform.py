@@ -71,3 +71,17 @@ def test_api_requires_key(tmp_path, monkeypatch):
     assert api.post("/ask", json={"question": "тест вопроса"}).status_code == 401
     assert api.post("/ask", json={"question": "тест вопроса"}, headers={"X-API-Key": "bad"}).status_code == 401
     assert server.client("kb_good")["role"] == "Метролог"
+
+
+def test_named_documents_and_rule_routing():
+    from kbagent.agent import named_docs
+    cards = {"g": {"title": "ГОСТ Р 7.0.97-2016 Организационно-распорядительная документация"},
+             "s": {"title": "СТП ДП-01-2026 «Порядок входного контроля»"},
+             "o": {"title": "Осциллографы цифровые АКИП-4115/1В, АКИП-4115/2В"},
+             "m": {"title": "Мультиметр цифровой MASTECH MAS830L"}}
+    assert named_docs("какие поля у документа по госту 7.0.97", cards) == {"g"}
+    assert named_docs("Что в пункте 3.2 СТП ДП-01-2026?", cards) == {"s"}
+    assert named_docs("Предохранитель в MAS830L?", cards) == {"m"}
+    assert named_docs("Какой срок входного контроля?", cards) == set()
+    agent = Agent.__new__(Agent)
+    assert agent.route("Пришла партия 450 резисторов. Сколько штук нужно осмотреть?") == "documents"
