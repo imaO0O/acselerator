@@ -13,3 +13,6 @@ __pycache__/
 .venv/
 .streamlit/secrets.toml
 
+
+# документы, загруженные через чат (могут быть конфиденциальными)
+data/raw/uploaded/

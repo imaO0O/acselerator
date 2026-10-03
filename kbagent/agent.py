@@ -78,7 +78,7 @@ class Agent:
             retrieval = retrieve(self.index, question, allowed)
             a = answer_from_documents(question, retrieval)
             sources = [{"n": n, "label": source_label(h), "text": h.chunk.text, "doc_id": h.chunk.doc_id,
-                        "clause": h.chunk.clause, "page": h.chunk.page_start,
+                        "clause": h.chunk.clause, "page": h.chunk.page_start, "page_end": h.chunk.page_end,
                         "cited": n in a.cited, "score": round(h.score, 3)}
                        for n, h in enumerate(a.hits, 1)]
             result = AgentResult(question, role, route, a.status, a.text, sources=sources, stats=a.stats)

@@ -16,6 +16,8 @@ sys.path.insert(0, str(ROOT))
 from kbagent import llm  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
+from kbagent.preview import render_page, source_path  # noqa: E402
+from kbagent.uploads import add_upload, list_uploads, remove_upload  # noqa: E402
 
 DEMO_QUESTIONS = [
     "Что делать при искрении оборудования?",
@@ -46,7 +48,34 @@ def index_meta() -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def render_answer(r: dict) -> None:
+@st.cache_data(show_spinner=False, max_entries=200)
+def page_png(path: str, page: int, fragment: str) -> tuple[bytes, int]:
+    return render_page(path, page, fragment)
+
+
+@st.cache_data(show_spinner=False, max_entries=50)
+def file_bytes(path: str) -> bytes:
+    return Path(path).read_bytes()
+
+
+def render_source(s: dict, key: str) -> None:
+    """Фрагмент, страница оригинала с выделением и кнопка скачивания документа."""
+    st.write(s["text"])
+    path = source_path(s["doc_id"])
+    if path is None:
+        return
+    if path.suffix.lower() == ".pdf" and s.get("page"):
+        last = min(s.get("page_end") or s["page"], s["page"] + 1)
+        for page in range(s["page"], last + 1):
+            png, found = page_png(str(path), page, s["text"])
+            if found or page == s["page"]:
+                st.image(png, caption=f"Страница {page} файла «{path.name}» — фрагмент выделен", use_container_width=True)
+    elif path.suffix.lower() == ".docx":
+        st.caption("Документ Word: у него нет страниц, ссылка указывает раздел и пункт.")
+    st.download_button("Скачать документ", data=file_bytes(str(path)), file_name=path.name, key=key)
+
+
+def render_answer(r: dict, key: str = "x") -> None:
     kind, label = STATUS_VIEW.get(r["status"], ("info", r["status"]))
     getattr(st, kind)(label)
     text = re.sub(r"\[(\d+)\]", r"**[\1]**", r["text"]).replace("[БД]", "**[БД]**")
@@ -66,7 +95,7 @@ def render_answer(r: dict) -> None:
         st.markdown("**Источники**")
         for s in cited:
             with st.expander(f"[{s['n']}] {s['label']}"):
-                st.write(s["text"])
+                render_source(s, key=f"dl-{key}-{s['n']}")
     if other and r["status"] != "answer":
         st.markdown("**Где ещё можно поискать**")
         for s in other[:3]:
@@ -94,6 +123,34 @@ with st.sidebar:
     for q in DEMO_QUESTIONS:
         if st.button(q, use_container_width=True):
             st.session_state.pending = q
+
+    st.divider()
+    st.subheader("Добавить документ")
+    st.caption("PDF или DOCX — через минуту агент отвечает и по нему.")
+    st.session_state.setdefault("upload_key", 0)
+    files = st.file_uploader("Файлы", type=["pdf", "docx"], accept_multiple_files=True,
+                             key=f"uploader-{st.session_state.upload_key}", label_visibility="collapsed")
+    if files:
+        agent = get_agent()
+        for f in files:
+            with st.spinner(f"Читаю и индексирую «{f.name}»…"):
+                try:
+                    _, title, n = add_upload(agent.index, f.name, f.getvalue())
+                    st.session_state.setdefault("notices", []).append(
+                        ("success", f"«{title}» добавлен: {n} фрагментов") if n else
+                        ("warning", f"В «{title}» нет текстового слоя (скан) — нужен модуль распознавания"))
+                except Exception as e:  # noqa: BLE001 — показать пользователю причину
+                    st.session_state.setdefault("notices", []).append(("error", f"«{f.name}»: {e}"))
+        st.session_state.upload_key += 1   # очищаем поле загрузки
+        st.rerun()
+    for kind, msg in st.session_state.pop("notices", []):
+        getattr(st, kind)(msg)
+    for d in list_uploads():
+        col1, col2 = st.columns([4, 1])
+        col1.caption(d["title"])
+        if col2.button("✕", key=f"rm-{d['id']}", help="Удалить документ из индекса"):
+            remove_upload(get_agent().index, d["id"])
+            st.rerun()
 
     st.divider()
     st.subheader("Состояние")
@@ -133,11 +190,11 @@ chat_tab, log_tab, about_tab = st.tabs(["Чат", "Журнал запросов
 with chat_tab:
     if not st.session_state.history:
         st.info("Задайте вопрос внизу страницы или выберите демо-вопрос слева.")
-    for item in st.session_state.history:
+    for i, item in enumerate(st.session_state.history):
         with st.chat_message("user"):
             st.write(item["question"])
         with st.chat_message("assistant"):
-            render_answer(item)
+            render_answer(item, key=str(i))
 
 with log_tab:
     st.caption("Каждый запрос записывается в журнал logs/audit.jsonl: кто, что спросил, что получил и по каким источникам.")

@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from . import llm
-from .ingest import Chunk, parse_corpus
+from .ingest import Chunk, parse_corpus, parse_document
 from .text import tokenize
 
 
@@ -61,15 +61,46 @@ class Index:
         log(f"Фрагментов: {len(chunks)} из {len({c.doc_id for c in chunks})} документов")
         vectors = llm.embed([c.search_text for c in chunks])
         log(f"Векторы: {vectors.shape} за {time.time() - t0:.0f} с")
+        index = cls(chunks, vectors)
+        index.save(index_dir)
+        return index
+
+    def save(self, index_dir: Path) -> None:
         index_dir.mkdir(parents=True, exist_ok=True)
         with open(index_dir / "chunks.jsonl", "w", encoding="utf-8") as f:
-            for c in chunks:
+            for c in self.chunks:
                 f.write(json.dumps(c.to_dict(), ensure_ascii=False) + "\n")
-        np.save(index_dir / "vectors.npy", vectors)
-        meta = {"chunks": len(chunks), "documents": len({c.doc_id for c in chunks}),
+        np.save(index_dir / "vectors.npy", self.vectors)
+        meta = {"chunks": len(self.chunks), "documents": len({c.doc_id for c in self.chunks}),
                 "built": time.strftime("%Y-%m-%d %H:%M"), "embedding_model": "bge-m3"}
         (index_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        return cls(chunks, vectors)
+
+    def _rebuild_word_index(self) -> None:
+        self.bm25 = BM25([tokenize(c.search_text) for c in self.chunks])
+        self.access = np.array([c.access for c in self.chunks])
+
+    def add_document(self, path: Path, catalog: dict, index_dir: Path) -> list[Chunk]:
+        """Добавляет (или заменяет) один документ без пересборки всего индекса."""
+        new = parse_document(path, catalog)
+        self.remove_document(path.stem, index_dir, save=False)
+        if new:
+            vectors = llm.embed([c.search_text for c in new])
+            self.chunks = self.chunks + new
+            self.vectors = np.vstack([self.vectors, vectors]) if len(self.vectors) else vectors
+            self._rebuild_word_index()
+        self.save(index_dir)
+        return new
+
+    def remove_document(self, doc_id: str, index_dir: Path, save: bool = True) -> int:
+        keep = [i for i, c in enumerate(self.chunks) if c.doc_id != doc_id]
+        removed = len(self.chunks) - len(keep)
+        if removed:
+            self.chunks = [self.chunks[i] for i in keep]
+            self.vectors = self.vectors[keep]
+            self._rebuild_word_index()
+            if save:
+                self.save(index_dir)
+        return removed
 
     @classmethod
     def load(cls, index_dir: Path) -> "Index":
