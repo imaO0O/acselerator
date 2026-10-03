@@ -58,6 +58,14 @@ def test_near_matches_find_item_in_other_table(db):
     assert found and found[0][3]["name"] == "stock"
 
 
+def test_near_match_ignores_word_middles(db):
+    # «контрол» внутри «Микроконтроллер» — не ответ на вопрос о входном контроле
+    assert D._answer_near("скока дней длится входной контроль эри", db, {}) is None
+    exact = D._answer_near("Где лежит флюс?", db, {})
+    similar = D._answer_near("Сколько осталось припоя ПОС-40?", db, {})
+    assert exact.text.startswith("Найдено") and similar.text.startswith("Точного совпадения в учёте нет")
+
+
 def test_record_lookup_and_name_mismatch(db):
     a = D.answer_from_database("У мультиметра СИ-0012 истёк срок?", db, records=["СИ-0012"])
     assert a.status == "answer" and "Осциллограф" in a.text and "в вопросе" in a.text

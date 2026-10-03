@@ -45,6 +45,8 @@ def test_routing_rules_without_model():
     assert agent.route("Что делать при искрении оборудования?") == "documents"
     assert agent.route("В какой срок приступит ремонтная служба?") == "documents"
     assert agent.route("Когда поверка СИ-0018?") == "database"
+    assert agent.route("Сколько стоит поверка одного осциллографа?") == "documents"
+    assert agent.route("скока дней длится входной контроль эри") == "documents"
 
 
 def test_eval_helpers():

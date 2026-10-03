@@ -73,7 +73,7 @@ questions:
     group: основной
     type: doc
     question: Что должен сделать работник, если обнаружил неисправность ручного инструмента?
-    must_include: ["извещ|сообщ", "руководител"]
+    must_include: ["извещ|извест|сообщ", "руководител"]
     source: {doc: ot_instrument_835n, clause: "28"}
   - id: Q11
     group: основной

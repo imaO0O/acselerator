@@ -88,6 +88,9 @@ ANSWER_PROMPT = """Ответь на вопрос сотрудника ТОЛЬ�
 Результат запроса ({count} строк):
 {table}"""
 
+NOT_RECORDS_RE = re.compile(r"стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|оплат|зарплат|можно ли|нужно ли|"
+                            r"что делать|порядок|как оформить|кто должен", re.I)
+
 # поля с наименованиями и ФИО: модель пишет «= 'Белов'», а в базе «Белов И. Н.»
 FUZZY_COLUMNS = ("name", "responsible", "applicant", "location", "description", "model")
 
@@ -340,20 +343,33 @@ def _answer_near(question: str, db_path: Path, stats: dict) -> "DbAnswer | None"
         return None
     # обозначения из вопроса («ПОС-40», «DB-9», «100 нФ»): если их нет в записи — это не то, что спрашивали
     codes = [c.lower().replace(" ", "") for c in re.findall(r"[A-Za-zА-Яа-яЁё]*-?\s?\d+[A-Za-zА-Яа-я\d/-]*", question)]
-    lines, exact = [], False
+    terms = _near_terms(question)
+    scored = []
     for _, cols, rows, t in found:
         for row in rows:
+            words = " ".join(str(v) for c, v in zip(cols, row) if c in FUZZY_COLUMNS).lower().replace("ё", "е")
+            # слово вопроса засчитывается, только если с него начинается слово записи:
+            # «контрол» в «Микроконтроллер» — случайное совпадение, а не ответ
+            matched = [w for w in terms if re.search(rf"(?<![а-яa-z0-9]){re.escape(w.replace('ё', 'е'))}", words)]
+            if not matched:
+                continue
             record = " ".join(str(v) for v in row).lower().replace("ё", "е").replace(" ", "")
-            hit = all(c.replace("ё", "е") in record for c in codes)
-            exact = exact or hit
+            exact = len(matched) == len(terms) and all(c.replace("ё", "е") in record for c in codes)
             pairs = "; ".join(f"{_ru(t, c)} — {v}" for c, v in zip(cols, row)
                               if v not in (None, "") and c in RECORD_FIELDS)
-            lines.append(f"- {pairs}")
+            scored.append((len(matched), exact, f"- {pairs}", row, cols, t))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: -x[0])
+    best = scored[0][0]
+    scored = [s for s in scored if s[0] == best]          # только записи с наибольшим числом совпавших слов
+    exact = any(s[1] for s in scored)
     lead = "Найдено в учёте:" if exact else "Точного совпадения в учёте нет. Похожие записи:"
-    text = lead + "\n" + "\n".join(lines[:10]) + " [БД]"
-    sql, columns, rows, t = found[0]
-    return DbAnswer("answer", text, sql="\n".join(q for q, _, _, _ in found), columns=columns,
-                    rows=[list(r) for r in rows], stats=stats, labels=[_ru(t, c) for c in columns])
+    text = lead + "\n" + "\n".join(s[2] for s in scored[:10]) + " [БД]"
+    cols, t = scored[0][4], scored[0][5]
+    rows = [s[3] for s in scored if s[5] is t]
+    return DbAnswer("answer", text, sql="\n".join(q for q, _, _, _ in found), columns=cols,
+                    rows=[list(r) for r in rows], stats=stats, labels=[_ru(t, c) for c in cols])
 
 
 # поля записи, которые показываются в ответе по похожим записям
@@ -397,7 +413,8 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
     # похожие записи — только если модель искала запись по наименованию, ФИО или месту и не нашла;
     # на вопросах «до конца года» поиск по словам ловит случайные совпадения («повер» в «поверхностного»)
     name_search = re.search(r"lower\(\s*(?:\w+\.)?(?:%s)\s*\)\s+like" % "|".join(FUZZY_COLUMNS), sql, re.I)
-    if not rows and near and name_search:
+    # о ценах, правилах и порядке действий в учёте нет записей — похожие записи тут не ответ
+    if not rows and near and name_search and not NOT_RECORDS_RE.search(question):
         try:
             near_answer = _answer_near(question, db_path, stats)
         except (sqlite3.Error, llm.ModelError):
