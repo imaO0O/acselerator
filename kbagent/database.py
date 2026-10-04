@@ -56,6 +56,7 @@ SQL_PROMPT = """Ты переводишь вопрос сотрудника в �
 - Выбирай столбцы, нужные для ответа, и всегда добавляй инвентарный или номенклатурный номер, если он есть.
 - Не добавляй условий, которых нет в вопросе.
 - Если пишешь столбцы с псевдонимом таблицы (e.inv_no), объяви его: FROM equipment e.
+- Вычисляемому столбцу (COUNT, SUM) дай понятное название по-русски в двойных кавычках: COUNT(*) AS "всего".
 - Если на вопрос нельзя ответить по этим таблицам, верни ровно: НЕТ_ДАННЫХ
 Верни только SQL без пояснений.
 
@@ -68,6 +69,8 @@ SQL: SELECT part_no, name, qty, unit, batch FROM stock WHERE lower(name) LIKE '%
 SQL: SELECT part_no, name, qty, unit, batch, inspection_status FROM stock WHERE lower(name) LIKE '%конденсатор%' AND lower(name) LIKE '%100 нф%'
 Вопрос: Какие заявки на ремонт уже выполнены?
 SQL: SELECT r.id, r.inv_no, e.name, r.created_at, r.category, r.description FROM repair_requests r JOIN equipment e ON e.inv_no = r.inv_no WHERE r.status = 'выполнена'
+Вопрос: Сколько единиц оборудования сейчас в работе?
+SQL: SELECT COUNT(*) AS "в работе" FROM equipment WHERE status = 'в работе'
 Вопрос: Сколько стоит обед в столовой?
 SQL: НЕТ_ДАННЫХ
 
@@ -89,8 +92,12 @@ ANSWER_PROMPT = """Ответь на вопрос сотрудника ТОЛЬ�
 Результат запроса ({count} строк):
 {table}"""
 
-NOT_RECORDS_RE = re.compile(r"стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|оплат|зарплат|можно\b|\bнужно\b|"
+# цен и оплаты в учёте нет: такой вопрос к базе не отправляется — небольшая модель на «сколько стоит обед»
+# или «сколько стоит поверка» иногда собирает бессмысленный подсчёт по оборудованию
+PRICE_RE = re.compile(r"стоит|стоимост|\bцен[аыуе]?\b|расценк|тариф|оплат|зарплат|оклад", re.I)
+NOT_RECORDS_RE = re.compile(PRICE_RE.pattern + r"|можно\b|\bнужно\b|"
                             r"\bнадо\b|следует|должн|что делать|порядок|как оформить", re.I)
+AGGREGATE_RE = re.compile(r"\b(?:count|sum|avg|min|max|total)\s*\(", re.I)
 
 # где искать похожие записи: наименования, модели, ФИО, места и статусы
 NEAR_COLUMNS = ("name", "model", "responsible", "applicant", "location", "inspection_status", "status")
@@ -113,9 +120,10 @@ def _answer_records(question: str, db_path: Path, records: list[str]) -> "DbAnsw
     lines = []
     for _, cols, rows_, t in found:
         for row in rows_:
-            pairs = "; ".join(f"{_ru(t, c)} — {v}" for c, v in zip(cols, row) if v not in (None, ""))
-            lines.append(f"- {t['title'][:1].upper()}{t['title'][1:]}: {pairs}")
-    text = "\n".join(lines)
+            line = _row_text(cols, [_ru(t, c) for c in cols], row, RECORD_FIELDS | NEXT_FIELDS, question)
+            # записи из разных таблиц (оборудование и заявка на него) подписываются таблицей
+            lines.append(f"- {t['title'][:1].upper()}{t['title'][1:]}: {line}" if len(found) > 1 else f"- {line}")
+    text = "\n".join(lines) if len(lines) > 1 else lines[0][2:]
     sql, columns, rows, t0 = found[0]
     note = _name_mismatch(question, records, columns, rows)
     text = (f"{note}\n\n" if note else "") + text + " [БД]"
@@ -188,13 +196,25 @@ def _fuzzy_text(sql: str) -> str:
 
 
 def _labels(sql: str, columns: list) -> list[str]:
-    """Русские подписи столбцов результата: по таблицам, упомянутым в запросе (первая — основная)."""
+    """Русские подписи столбцов результата: по таблицам, упомянутым в запросе (первая — основная).
+    Псевдоним столбца («r.id AS repair_id») подписывается по исходному столбцу."""
     used = sorted((t for t in SCHEMA["tables"] if re.search(rf"\b{t['name']}\b", sql)),
                   key=lambda t: sql.lower().find(t["name"]))
+    aliases = {a.lower(): c for c, a in re.findall(r"\b(?:\w+\.)?(\w+)\s+AS\s+\"?(\w+)\"?", sql, re.I)}
+    by_alias = {m[2].lower(): m[1].lower() for m in re.finditer(r"\b(?:from|join)\s+(\w+)\s+(?:as\s+)?(\w+)", sql, re.I)}
+    tables = {t["name"]: t for t in SCHEMA["tables"]}
+    m = re.match(r"\s*select\s+(.+?)\s+from\s", sql, re.I | re.S)
+    items = [x.strip() for x in re.split(r",(?![^(]*\))", m.group(1))] if m else []
     out = []
-    for c in columns:
-        table = next((t for t in used if c in t["columns"]), None)
-        out.append(_ru(table, c) if table else c)
+    for k, c in enumerate(columns):
+        source = aliases.get(str(c).lower(), c)
+        table = None
+        if len(items) == len(columns):        # «r.status» — столбец таблицы с псевдонимом r
+            ref = re.match(r"(\w+)\.(\w+)", items[k])
+            if ref and by_alias.get(ref[1].lower()) in tables:
+                table = tables[by_alias[ref[1].lower()]]
+        table = table if table and source in table["columns"] else next((t for t in used if source in t["columns"]), None)
+        out.append(_ru(table, source) if table else str(c).replace("_", " "))
     return out
 
 
@@ -244,6 +264,13 @@ def _check(sql: str) -> None:
         raise ValueError("разрешены только запросы SELECT")
     if ";" in sql or FORBIDDEN.search(sql):
         raise ValueError("запрос изменяет данные или содержит несколько операторов")
+    # «SELECT e.inv_no, e.name, COUNT(*) … WHERE …» без GROUP BY: одна случайная строка с общим числом
+    m = re.match(r"\s*select\s+(.+?)\s+from\s", sql, re.I | re.S)
+    if m and AGGREGATE_RE.search(m.group(1)) and not re.search(r"\bgroup\s+by\b", sql, re.I):
+        plain = [x.strip() for x in re.split(r",(?![^(]*\))", m.group(1)) if not AGGREGATE_RE.search(x)]
+        if plain:
+            raise ValueError(f"столбцы {', '.join(plain)} вместе с COUNT/SUM без GROUP BY: "
+                             "оставь только подсчёт или добавь GROUP BY")
 
 
 def _like(pattern, value, escape=None):
@@ -348,11 +375,111 @@ def _name_mismatch(question: str, records: list[str], columns: list, rows: list)
     return None
 
 
+DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def display(value) -> str:
+    """Значение для показа: даты по-русски (2026-11-13 → 13.11.2026), 12.0 → 12."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return DATE_RE.sub(lambda m: f"{m[3]}.{m[2]}.{m[1]}", str(value))
+
+
 def _table(columns: list, rows: list) -> str:
     if not rows:
         return "(пусто)"
-    lines = [" | ".join(columns)] + [" | ".join("" if v is None else str(v) for v in r) for r in rows]
+    lines = [" | ".join(columns)] + [" | ".join("" if v is None else display(v) for v in r) for r in rows]
     return "\n".join(lines)
+
+
+ID_COLUMNS = ("inv_no", "part_no")
+KEY_COLUMNS = ID_COLUMNS + ("name", "applicant", "responsible")   # по ним запись узнаётся в тексте
+
+
+def _row_text(columns: list, labels: list, row, fields=None, question: str = "", limit: int | None = None) -> str:
+    """Запись одной строкой: «ОБ-0302 — Вибростенд: вид — испытательное; участок — …».
+    Поля, о которых спрашивают (общие основы слов с вопросом), идут первыми."""
+    values = {c: v for c, v in zip(columns, row) if v not in (None, "")}
+    head = [display(values[c]) for c in ID_COLUMNS if c in values][:1]
+    if "name" in values:
+        head.append(display(values["name"]))
+    rest, asked = [], set(tokenize(question))
+    for c, label, v in zip(columns, labels, row):
+        if v in (None, "") or (head and c in ID_COLUMNS + ("name",)) or (fields and c not in fields):
+            continue
+        if c == "unit" and "qty" in values:
+            continue                                   # «количество — 12 кг», а не «12» и «кг» отдельно
+        value = f"{display(v)} {values['unit']}" if c == "qty" and "unit" in values else display(v)
+        rest.append((f"{label} — {value}", len(asked & set(tokenize(label)))))
+    rest = [r for r, _ in sorted(rest, key=lambda x: -x[1])][:limit]
+    text = " — ".join(head)
+    if rest:
+        text = f"{text}: {'; '.join(rest)}" if text else "; ".join(rest)
+    return text[:1].upper() + text[1:]
+
+
+def _plain_answer(columns: list, labels: list, rows: list, question: str = "") -> str:
+    """Ответ, собранный прямо из записей, — когда пересказ модели не прошёл проверку."""
+    if len(rows) == 1:
+        return _row_text(columns, labels, rows[0], question=question)
+    # поле с одинаковым значением у всех записей («ответственный — Белов И. Н.») — один раз, в начале
+    same = [k for k, c in enumerate(columns) if c not in ID_COLUMNS + ("name", "unit")
+            and len({r[k] for r in rows}) == 1 and rows[0][k] not in (None, "")]
+    common = "; ".join(f"{labels[k]} — {display(rows[0][k])}" for k in same)
+    keep = [k for k in range(len(columns)) if k not in same]
+    cols, labs = [columns[k] for k in keep], [labels[k] for k in keep]
+    # в списке — главные поля каждой записи; все поля — в таблице под ответом
+    lines = [f"- {_row_text(cols, labs, [r[k] for k in keep], question=question, limit=4)}" for r in rows[:15]]
+    more = "\n\nПоказаны первые 15 — все записи в таблице ниже." if len(rows) > 15 else ""
+    head = f"Найдено записей: {len(rows)}" + (f" ({common})" if common else "") + "."
+    return head + "\n\n" + "\n".join(lines) + more
+
+
+def _row_keys(columns: list, row) -> list[str]:
+    """Чем запись должна быть названа в пересказе: номер, иначе наименование, иначе все значения (итоги)."""
+    for c in KEY_COLUMNS:
+        if c in columns and row[columns.index(c)] not in (None, ""):
+            return [display(row[columns.index(c)])]
+    return [display(v) for v in row if v not in (None, "")]
+
+
+def _mentions(text: str, value: str) -> bool:
+    norm = lambda x: re.sub(r"\s+", " ", x.lower().replace("ё", "е"))  # noqa: E731
+    value = norm(value)
+    if re.fullmatch(r"[\d.,]+", value):
+        return re.search(rf"(?<![\d.,]){re.escape(value)}(?![\d])", norm(text)) is not None
+    return value in norm(text)
+
+
+EMPTY_CLAIM_RE = re.compile(r"^\W*(?:нет\b|записей нет|ничего не найдено)|записей нет|нет данных|не найден[оаы]?\b|"
+                            r"не числится|отсутству", re.I)
+
+
+def _retelling_problem(text: str, columns: list, labels: list, rows: list) -> str | None:
+    """Почему пересказ записей нельзя показывать (или None): «Записей нет» при найденных записях,
+    скопированная таблица, пропущенная запись, разбор одной записи по полям."""
+    if not rows:
+        return None
+    if "|" in text:
+        return "таблица"
+    for row in rows[:10]:
+        values = [display(v) for v in row if v not in (None, "")][:3]
+        if len(values) == 3 and _mentions(text, ", ".join(values)):
+            return "таблица"
+    if EMPTY_CLAIM_RE.search(text):
+        return "записей нет"
+    if len(rows) == 1:
+        keys = [display(rows[0][columns.index(c)]) for c in KEY_COLUMNS
+                if c in columns and rows[0][columns.index(c)] not in (None, "")] or _row_keys(columns, rows[0])
+        if not any(_mentions(text, key) for key in keys):
+            return "пропущена запись"
+    for row in rows[:10]:
+        if len(rows) > 1 and not all(_mentions(text, key) for key in _row_keys(columns, row)):
+            return "пропущена запись"
+    field_marks = sum(1 for lab in set(labels) if re.search(rf"\b{re.escape(lab)}\s*:", text, re.I))
+    if len(rows) == 1 and field_marks >= 3:
+        return "поля списком"      # «номер заявки: 2; инвентарный номер: …» — разбор записи по полям
+    return None
 
 
 def _answer_near(question: str, db_path: Path, stats: dict) -> "DbAnswer | None":
@@ -383,8 +510,7 @@ def _answer_near(question: str, db_path: Path, stats: dict) -> "DbAnswer | None"
         record = " ".join(str(v) for v in row).lower().replace("ё", "е").replace(" ", "")
         found_all = obj == known_obj if known_obj else matched == known
         exact = exact or (found_all and all(c.replace("ё", "е") in record for c in codes))
-        pairs = "; ".join(f"{_ru(t, c)} — {v}" for c, v in zip(cols, row) if v not in (None, "") and c in RECORD_FIELDS)
-        lines.append(f"- {pairs}")
+        lines.append(f"- {_row_text(cols, [_ru(t, c) for c in cols], row, RECORD_FIELDS)}")
     lead = "Найдено в учёте:" if exact else "Точного совпадения в учёте нет. Похожие записи:"
     text = lead + "\n" + "\n".join(lines[:10]) + " [БД]"
     t, cols = scored[0][5], scored[0][4]
@@ -394,8 +520,9 @@ def _answer_near(question: str, db_path: Path, stats: dict) -> "DbAnswer | None"
 
 
 # поля записи, которые показываются в ответе по похожим записям
-RECORD_FIELDS = {"inv_no", "part_no", "id", "name", "model", "qty", "unit", "location", "status",
-                 "inspection_status", "responsible", "next_check", "category"}
+RECORD_FIELDS = {"inv_no", "part_no", "id", "name", "model", "qty", "unit", "batch", "location", "status",
+                 "inspection_status", "responsible", "applicant", "next_check", "category", "description"}
+NEXT_FIELDS = {"last_check", "check_type", "received", "created_at"}   # для записи по номеру — тоже
 
 
 def answer_from_database(question: str, db_path: Path, records: list[str] | None = None,
@@ -407,6 +534,9 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
     stats = {}
     if records:
         return _answer_records(question, db_path, records)
+    if PRICE_RE.search(question):
+        return DbAnswer("no_data", "В учётной базе нет цен и оплаты — только оборудование, средства измерений, "
+                                   "заявки на ремонт и склад.", stats=stats)
     try:
         raw, s1 = llm.chat([{"role": "user", "content": SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION, question=question)}],
                            max_tokens=300)
@@ -449,6 +579,16 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
         return DbAnswer("no_data", "Записи учёта не отвечают на этот вопрос.", sql=sql, columns=columns,
                         rows=[list(r) for r in rows], stats=stats)
     bad = _unsupported_numbers(text, rows, question)
+    problem = _retelling_problem(text, columns, labels, rows)
+    if len(rows) > 1 and not problem:
+        problem = "несколько записей"   # модель перечисляет их строками через запятую, без подписей полей
+    keyed = any(c in columns for c in KEY_COLUMNS)
+    total = len(rows) == 1 and not keyed and not any(re.search(r"[a-z]", lab, re.I) for lab in labels)
+    if (bad or problem) and (keyed or total):
+        # у записей есть номер или наименование, а у итога — понятные подписи: ответ собирается прямо
+        # из результата — точно, единообразно и без второго вызова модели («Партия: 1» при трёх партиях)
+        stats["retelling_replaced"] = problem or "числа"
+        text, bad = _plain_answer(columns, labels, rows, question), []
     if bad:
         # одна попытка исправиться: модель видит, каких чисел нет в записях
         messages = [{"role": "user", "content": ANSWER_PROMPT.format(question=question, count=len(rows),
@@ -462,6 +602,9 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
             stats["unsupported_numbers"] = True
             return DbAnswer("no_data", "Ответ по учётной базе не подтвердился записями.", sql=sql, columns=columns,
                             rows=[list(r) for r in rows], stats=stats)
+    if len(re.findall(r"(?m)^\s*\d+[.)]\s", text)) == 1:
+        text = re.sub(r"(?m)^(\s*)1[.)]\s+", r"\1", text).strip()
+        text = text[:1].upper() + text[1:]
     text = re.sub(r"[ \t]+([.,;:])", r"\1", re.sub(r"\s*\[БД\]\s*", " ", text)).strip() + " [БД]"
     return DbAnswer("answer", text, sql=sql, columns=columns, rows=[list(r) for r in rows], stats=stats,
                     labels=labels)

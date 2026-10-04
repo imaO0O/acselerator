@@ -53,6 +53,9 @@ CSS = """
 /* кнопки-источники под ответом — компактнее */
 .st-key-sources button { padding: .15rem .6rem; min-height: 0; text-align: left; justify-content: flex-start; }
 .st-key-sources button p { font-size: .82rem; }
+/* боковая панель — плотнее: на экране ноутбука 1366×768 видны и диалоги, и пользователь с «Выйти» */
+[data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] { gap: .55rem; }
+[data-testid="stSidebarUserContent"] hr { margin: .4rem 0; }
 /* подписи — контрастнее на светлом фоне */
 [data-testid="stCaptionContainer"] { color: #5C5470; }
 </style>

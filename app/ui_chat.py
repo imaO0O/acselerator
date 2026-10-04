@@ -8,7 +8,7 @@ import streamlit as st
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
 from kbagent import auth
-from kbagent.database import column_label
+from kbagent.database import column_label, display
 from kbagent.preview import source_path
 from kbagent.uploads import KIND_PENDING
 
@@ -29,6 +29,11 @@ CHAT_CSS = """
 [class*="st-key-sources"] button p { font-size: .84rem; }
 [class*="st-key-conv-"] button, [class*="st-key-conv-"] button * { justify-content: flex-start; text-align: left; }
 [class*="st-key-conv-"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .88rem; }
+/* телефон: без аватаров — ответу вся ширина экрана */
+@media (max-width: 640px) {
+  [data-testid^="stChatMessageAvatar"] { display: none; }
+  [data-testid="stChatMessage"] { gap: 0; padding-left: .2rem; padding-right: .2rem; }
+}
 </style>
 """
 
@@ -62,10 +67,13 @@ def sidebar() -> str:
             query = st.text_input("Поиск по диалогам", placeholder="Поиск по диалогам", key="conv_search",
                                   label_visibility="collapsed")
             shown = [c for c in convs if not query or query.lower() in (c["title"] + " " + c["questions"]).lower()]
-            st.caption("Диалоги" if shown else "Ничего не найдено")
+            if not shown:
+                st.caption("Ничего не найдено")
+            # длинный список прокручивается сам: имя пользователя и «Выйти» остаются на экране ноутбука
+            box = st.container(height=min(49 * len(shown[:40]) + 4, 200), border=False) if shown else st.container()
             for c in shown[:40]:
                 active = c["id"] == conv["id"]
-                left, right = st.columns([7, 1], vertical_alignment="center", gap="small")
+                left, right = box.columns([7, 1], vertical_alignment="center", gap="small")
                 if left.button(c["title"], key=f"conv-{c['id']}", type="secondary" if active else "tertiary",
                                use_container_width=True, help=c["updated"]):
                     st.session_state.conv = auth.load_conversation(_key(), c["id"]) or auth.new_conversation()
@@ -75,7 +83,6 @@ def sidebar() -> str:
                     if active:
                         st.session_state.conv = auth.new_conversation()
                     st.rerun()
-        st.divider()
         with st.popover("Где искать ответ", icon=":material/tune:", use_container_width=True):
             mode = st.radio("Где искать ответ", list(ROUTES), key="route_mode", label_visibility="collapsed",
                             help="Обычно агент сам выбирает: документы, учётная база или оба источника")
@@ -98,15 +105,17 @@ def show_source(s: dict, key: str) -> None:
     path = source_path(s["doc_id"])
     is_pdf = bool(path and path.suffix.lower() == ".pdf" and s.get("page"))
     if is_pdf:
-        png, found = page_png(str(path), s["page"], s["text"], crop=True)
-        if found:
-            st.image(png, caption=f"Страница {s['page']} — фрагмент выделен", use_container_width=True)
-        if st.toggle("Показать страницу целиком", key=f"whole-{key}") or not found:
-            last = min(s.get("page_end") or s["page"], s["page"] + 1)
-            for page in range(s["page"], last + 1):
-                png, hit = page_png(str(path), page, s["text"])
-                if hit or page == s["page"]:
-                    st.image(png, caption=f"Страница {page} файла «{path.name}»", use_container_width=True)
+        # фрагмент, перешедший на следующую страницу, показывается с обеих страниц
+        last = min(s.get("page_end") or s["page"], s["page"] + 2)
+        shots = [(page, *page_png(str(path), page, s["text"], crop=True)) for page in range(s["page"], last + 1)]
+        best = max(found for _, _, found in shots)
+        hits = [(page, png) for page, png, found in shots if found and found >= max(3, best // 5)]
+        for page, png in hits:
+            st.image(png, caption=f"Страница {page} — фрагмент выделен", use_container_width=True)
+        if st.toggle("Показать страницу целиком", key=f"whole-{key}") or not hits:
+            for page in [page for page, _ in hits] or [s["page"]]:
+                png, _ = page_png(str(path), page, s["text"])
+                st.image(png, caption=f"Страница {page} файла «{path.name}»", use_container_width=True)
     elif path and path.suffix.lower() == ".docx":
         st.caption("В документе Word нет страниц — ссылка указывает раздел и пункт.")
     with st.expander("Текст фрагмента", expanded=not is_pdf):
@@ -178,11 +187,16 @@ def render_answer(item: dict, i: int) -> None:
                    icon=":material/pending:")
 
     if item.get("rows"):
-        labels = item.get("labels") or [column_label(c) for c in item["columns"]]
-        df = pd.DataFrame(item["rows"], columns=_unique(labels))
-        if len(df) == 1 and len(df.columns) > 4:      # одна запись — карточка «поле — значение»
+        labels = [lab[:1].upper() + lab[1:] for lab in item.get("labels") or [column_label(c) for c in item["columns"]]]
+        rows = [[display(v) if isinstance(v, str) else v for v in r] for r in item["rows"]]   # даты — 13.11.2026
+        df = pd.DataFrame(rows, columns=_unique(labels))
+        if len(df) == 1 and len(df.columns) > 4:
+            # одна запись уже изложена в ответе — карточка «поле — значение» свёрнута, чтобы не повторять текст
             df = pd.DataFrame({"Поле": df.columns, "Значение": [str(v) for v in df.iloc[0]]})
-        st.dataframe(df, hide_index=True, use_container_width=True)
+            with st.expander("Запись в учёте — все поля", icon=":material/table_rows:"):
+                st.dataframe(df, hide_index=True, use_container_width=True)
+        else:
+            st.dataframe(df, hide_index=True, use_container_width=True)
         if ctx()["is_admin"] and item.get("sql"):
             with st.expander("Запрос к учётной базе"):
                 st.code(item["sql"], language="sql")
@@ -210,7 +224,7 @@ def render_answer(item: dict, i: int) -> None:
 
     left, mid, right = st.columns([5, 2, 2], vertical_alignment="center")
     seconds = f"{item['seconds']:.1f}".replace(".", ",")
-    left.caption(f"{ROUTE_LABELS.get(item['route'], '')} · {seconds} с")
+    left.caption(ROUTE_LABELS.get(item["route"], "") + ("" if item["status"] == "info" else f" · {seconds} с"))
     with mid:
         if item["status"] not in ("error", "info"):       # справку («что ты умеешь») не оцениваем
             if item.get("feedback") is None:

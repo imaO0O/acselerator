@@ -1,0 +1,45 @@
+# Разграничение доступа: одни и те же вопросы под разными ролями.
+# Регламент метрологии (РИ ДП-04) доступен метрологу и администратору, инженеру — нет:
+# инженер должен получить честный отказ, а не ответ из похожего документа.
+#   python eval/run_eval.py --questions eval/roles.yaml --out roles
+questions:
+  - id: R01
+    group: роли
+    type: none
+    role: Инженер производства
+    question: Какой порядок отправки средств измерений на поверку?
+    note: в доступных инженеру руководствах есть «поверка осциллографа» — это не порядок отправки СИ
+  - id: R02
+    group: роли
+    type: none
+    role: Инженер производства
+    question: За сколько дней до истечения срока поверки метролог уведомляет подразделение?
+  - id: R03
+    group: роли
+    type: doc
+    role: Инженер производства
+    question: Что делать при искрении оборудования?
+    must_include: ["2211"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya, clause: "3.1"}
+    note: общие регламенты инженеру доступны
+  - id: R04
+    group: роли
+    type: doc
+    role: Метролог
+    question: За сколько дней до истечения срока поверки метролог уведомляет подразделение?
+    must_include: ["30"]
+    source: {doc: RI-DP-04_sredstva_izmerenij, clause: "3.3"}
+  - id: R05
+    group: роли
+    type: doc
+    role: Метролог
+    question: Где проводится поверка средств измерений?
+    must_include: ["аккредитован"]
+    source: {doc: RI-DP-04_sredstva_izmerenij, clause: "3.1"}
+  - id: R06
+    group: роли
+    type: doc
+    role: Метролог
+    question: Можно ли применять средство измерений без поверительного знака?
+    must_include: ["запрещ"]
+    source: {doc: RI-DP-04_sredstva_izmerenij, clause: "4.1"}

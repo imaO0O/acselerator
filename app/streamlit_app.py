@@ -94,7 +94,7 @@ st.navigation(pages, position="sidebar" if ctx["is_admin"] else "hidden").run()
 with st.sidebar:
     st.divider()
     st.markdown(f"**{ctx['name']}**  \n:gray[{ctx['role']}]")
-    if settings.auth_required and st.button("Выйти", icon=":material/logout:", use_container_width=True):
+    if settings.auth_required and st.button("Выйти", icon=":material/logout:", key="logout", type="tertiary"):
         auth.end_session(st.session_state.get("token"))
         for k in ("user", "token", "conv", "ctx"):
             st.session_state.pop(k, None)

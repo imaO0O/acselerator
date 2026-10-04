@@ -109,7 +109,67 @@ SERVICE_LINE_RE = re.compile(r"^\s*[-*]?\s*(?:основани[ея]|источ�
 
 OPEN_QUESTION_RE = re.compile(r"^\s*(?:а\s+)?(?:что|как\w*|где|когда|кто|кому|сколько|куда|чем|зачем|"
                               r"(?:в|на|по|за|с|до|при)\s+как\w+)\b", re.I)
-REF_RUN_RE = re.compile(r"\[\d+(?:\s*[,–-]\s*\d+)*\](?:[\s.]*\[\d+(?:\s*[,–-]\s*\d+)*\])+")
+REF_RUN_RE = re.compile(r"\[\d+(?:\s*[,–-]\s*\d+)*\](?:[\s.,]*\[\d+(?:\s*[,–-]\s*\d+)*\])+")   # и «[1, 2], [2]»
+
+
+WORD_RE = re.compile(r"[А-Яа-яЁё]{6,}")
+
+
+def _one_edit(a: str, b: str) -> bool:
+    """Слова одной длины отличаются одной буквой или перестановкой соседних букв («одпуск» — «допуск»).
+    Вставку и удаление буквы не считаем: так отличаются и формы слова («допуска» — «допуск»)."""
+    if a == b or len(a) != len(b):
+        return False
+    diff = [i for i in range(len(a)) if a[i] != b[i]]
+    return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1
+                              and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+
+
+def _fix_garbled(text: str, hits: list[Hit], question: str) -> tuple[str, list[str]]:
+    """Слово ответа, которого нет ни во фрагментах, ни в вопросе ни в какой форме, но которое на одну букву
+    отличается от слова фрагмента, — огрех генерации («наряд-одпуск»): заменяется словом фрагмента.
+    Другая форма того же слова («работнику» при «работника» во фрагменте) не трогается."""
+    source = " ".join([question] + [h.chunk.text for h in hits])
+    words = {w.lower().replace("ё", "е") for w in WORD_RE.findall(source)}
+    stems = {tokenize(w)[0] for w in words if tokenize(w)}
+    fixed = []
+
+    def repl(m):
+        word = m.group(0)
+        low = word.lower().replace("ё", "е")
+        if low in words or (tokenize(low) and tokenize(low)[0] in stems):
+            return word
+        near = {w for w in words if _one_edit(low, w)}
+        if not near and tokenize(low) and low.startswith(stem := tokenize(low)[0]) and len(stem) >= 5:
+            # другой формы во фрагментах нет — сравниваем основы: «одпуска» → основа «допуск» + «а»
+            near = {s + low[len(stem):] for s in stems if _one_edit(stem, s)}
+        if len(near) != 1:
+            return word
+        right = near.pop()
+        fixed.append(f"{word} → {right}")
+        return right[:1].upper() + right[1:] if word[:1].isupper() else right
+    return WORD_RE.sub(repl, text), fixed
+
+
+LEADING_REF_RE = re.compile(
+    r"(?m)(^[ \t]*(?:[-*•][ \t]+|\d{1,2}[.)][ \t]+)?|(?<=[.!?])[ \t]+)"     # начало строки, пункта или предложения
+    r"(\[\d+(?:\s*[,–-]\s*\d+)*\])[ \t]+(?=[А-ЯЁA-Z«])"                     # ссылка перед предложением
+    r"([^\n\[]*?)([.!?;])(?=[ \t]*$|[ \t]+[А-ЯЁA-Z«\[])")                    # до конца предложения
+
+
+def _refs_to_end(text: str) -> str:
+    """«[1] Категория А — отказ… [2] При отказе…» → «Категория А — отказ… [1]. При отказе… [2].»:
+    ссылка — в конце утверждения, как в остальных ответах."""
+    return LEADING_REF_RE.sub(lambda m: f"{m[1]}{m[3]} {m[2]}{m[4]}", text)
+
+
+def _support(hit: Hit, hits: list[Hit]) -> float:
+    """Оценка фрагмента; у соседнего (продолжение найденного пункта) — оценка того, к кому он присоединён."""
+    if not hit.neighbor:
+        return hit.score
+    pos = lambda h: int(m[1]) if (m := re.search(r"#(\d+)$", h.chunk.id)) else -10  # noqa: E731  «#card» — карточка
+    return max((h.score for h in hits if not h.neighbor and h.chunk.doc_id == hit.chunk.doc_id
+                and abs(pos(h) - pos(hit)) == 1), default=0.0)
 
 
 def _merge_refs(text: str) -> str:
@@ -146,7 +206,8 @@ def _add_prohibitions(question: str, text: str, hits: list[Hit], cited: list[int
             # и ещё не быть изложен в ответе
             if (PROHIBIT_RE.search(sentence) and words & asked
                     and len(words & have) / len(words) < 0.6):
-                extra.append(f"- {re.sub(r'^\d{1,3}(?:\.\d{1,3})*\.?\s+', '', sentence.strip())} [{n}]")
+                body = re.sub(r"^\d{1,3}(?:\.\d{1,3})*\.?\s+", "", sentence.strip())
+                extra.append(f"- {body.rstrip('.;:!')} [{n}].")       # ссылка — перед точкой, как в ответе
                 have |= words
     return text + "\n\nЗапреты из процитированных пунктов:\n" + "\n".join(extra) if extra else text
 
@@ -335,7 +396,19 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
                               hits=hits, stats=stats)
             text = checked
     text, hits, cited = _renumber(text, hits, valid)
-    text = _merge_refs(text)
+    strongest = max((h.score for h in hits if not h.neighbor), default=0.0)
+    if (retrieval.scored_by == "reranker"
+            and max(_support(hits[n - 1], hits) for n in cited) < settings.cited_threshold <= strongest):
+        # модель опёрлась только на слабые фрагменты, а сильный не использовала — значит, сильный не о том,
+        # а слабые лишь похожи словами («поверка осциллографа» на вопрос «как отправить СИ на поверку»).
+        # Если слабое всё найденное (разговорный вопрос), решает проверка «зоны сомнения» (verify)
+        stats["weak_citations"] = True
+        return Answer("model_refused", "Найденные фрагменты относятся к другому вопросу — ответа в документах нет.",
+                      hits=hits, stats=stats)
+    text = _refs_to_end(_merge_refs(text))
+    text, garbled = _fix_garbled(text, hits, question)
+    if garbled:
+        stats["garbled_fixed"] = garbled
     if OPEN_QUESTION_RE.match(question):
         # «Что делать при искрении?» → «Нет. При искрении…»: правило о неверной посылке сработало
         # на вопросе, который не предполагает ответа «да/нет», — убираем лишнее «Нет»

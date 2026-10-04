@@ -147,6 +147,13 @@ def quality() -> None:
         st.markdown(latest.read_text(encoding="utf-8"))
     else:
         st.info("Результатов проверки качества пока нет.")
+    for title, name in [("Разграничение доступа: одни вопросы под ролями инженера и метролога", "roles.md"),
+                        ("Тот же эталон на ноутбуке без видеокарты", "laptop.md"),
+                        ("Тот же эталон на ноутбуке с небольшой видеокартой", "smallgpu.md")]:
+        path = results / name
+        if path.exists():
+            with st.expander(title):
+                st.markdown(path.read_text(encoding="utf-8"))
 
 
 def system() -> None:

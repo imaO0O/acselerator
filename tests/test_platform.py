@@ -85,3 +85,27 @@ def test_named_documents_and_rule_routing():
     assert named_docs("Какой срок входного контроля?", cards) == set()
     agent = Agent.__new__(Agent)
     assert agent.route("Пришла партия 450 резисторов. Сколько штук нужно осмотреть?") == "documents"
+
+
+def test_source_preview_marks_whole_fragment_across_lines(tmp_path):
+    import pymupdf
+    from kbagent import preview
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "2.1 Equipment failures are divi-")
+    page.insert_text((72, 90), "ded into three categories. Other text below.")
+    path = tmp_path / "d.pdf"
+    doc.save(path)
+    png, marked = preview.render_page(str(path), 1, "2.1 Equipment failures are divided into three categories.",
+                                      crop=True)
+    assert marked == 9 and png[:4] == b"\x89PNG"     # перенос «divi-/ded» склеен, «Other text below» не выделен
+
+
+def test_continuation_of_long_clause_gets_its_own_pages():
+    from kbagent import ingest
+    sentence = "Работник выполняет требования инструкции по охране труда при работе на оборудовании участка. "
+    pages = [(1, ["1 Общие положения", "1.1 " + sentence * 6]), (2, [sentence * 6]), (3, [sentence * 6])]
+    meta = {"id": "doc", "title": "Документ", "kind": "Инструкция", "access": "all"}
+    chunks = ingest._chunks(ingest._units(pages), meta)
+    assert len(chunks) >= 3 and chunks[0].page_start == 1
+    assert chunks[-1].page_start >= 2 and chunks[-1].page_end == 3     # не «стр. 1–3» у последнего куска

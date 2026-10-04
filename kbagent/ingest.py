@@ -9,7 +9,7 @@
 """
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import pymupdf
@@ -56,10 +56,19 @@ class _Unit:
     page_start: int | None
     page_end: int | None
     lines: list
+    pages: list = field(default_factory=list)   # страница каждой строки
 
     @property
     def text(self) -> str:
         return " ".join(self.lines).strip()
+
+    def spans(self) -> list[tuple[int, int | None]]:
+        """Начало каждой строки в text и её страница."""
+        out, pos = [], 0
+        for line, page in zip(self.lines, self.pages):
+            out.append((pos, page))
+            pos += len(line) + 1
+        return out
 
 
 # ---------- чтение файлов ----------
@@ -183,25 +192,28 @@ def _units(pages) -> list[_Unit]:
                 flush()
                 if "." not in number:
                     last_top = int(number)
-                current = _Unit(number, heading, page_no, page_no, [line])
+                current = _Unit(number, heading, page_no, page_no, [line], [page_no])
                 continue
             if current.page_start is None:
                 current.page_start = page_no
                 current.heading = heading
             current.page_end = page_no
             current.lines.append(line)
+            current.pages.append(page_no)
     flush()
     return [u for u in units if u.text]
 
 
-def _split_long(text: str) -> list[str]:
+def _split_long(text: str) -> list[tuple[int, str]]:
+    """Куски длинного текста с перекрытием и начало каждого куска в тексте."""
     parts, start = [], 0
     while start < len(text):
         end = min(start + TARGET, len(text))
         if end < len(text):
             cut = text.rfind(". ", start + TARGET // 2, end)
             end = cut + 1 if cut > 0 else end
-        parts.append(text[start:end].strip())
+        raw = text[start:end]
+        parts.append((start + len(raw) - len(raw.lstrip()), raw.strip()))
         if end >= len(text):
             break
         # перекрытие начинается с начала предложения (или хотя бы слова), а не с середины слова:
@@ -233,14 +245,27 @@ def _chunks(units: list[_Unit], meta: dict) -> list[Chunk]:
         base = dict(doc_id=meta["id"], doc_title=meta["title"], doc_kind=meta["kind"], access=meta["access"],
                     clause=clause, heading=group[0].heading,
                     page_start=min(pages) if pages else None, page_end=max(pages) if pages else None)
-        pieces = _split_long(text) if len(text) > MAX_LEN else [text]
-        opening = re.sub(r"^\s*\d{1,3}(?:\.\d{1,3})*\.?\s+", "", pieces[0])        # без номера пункта
+        # страница каждой строки по её началу в общем тексте: у куска длинного пункта —
+        # свои страницы, а не весь пункт («стр. 125», а не «стр. 124–126»)
+        line_pages, offset = [], 0
+        for u in group:
+            line_pages += [(offset + pos, page) for pos, page in u.spans() if page]
+            offset += len(u.text) + 1
+        pieces = _split_long(text) if len(text) > MAX_LEN else [(0, text)]
+        opening = re.sub(r"^\s*\d{1,3}(?:\.\d{1,3})*\.?\s+", "", pieces[0][1])     # без номера пункта
         lead = re.split(r"(?<=[.;:])\s", opening, maxsplit=1)[0][:200]
-        for k, piece in enumerate(pieces):
+        for k, (found, piece) in enumerate(pieces):
             # продолжение длинного пункта получает в заголовок его начало: иначе фрагмент «из числа
             # административно-технического персонала…» не говорит, о чём он, и поиск его не узнаёт
             heading = base["heading"] if k == 0 else f"{base['heading'] or ''} — продолжение: {lead}".strip(" —")
-            chunks.append(Chunk(id=f"{meta['id']}#{len(chunks)}", text=piece, **{**base, "heading": heading}))
+            own = {**base, "heading": heading}
+            if len(pieces) > 1:
+                # строка, в которой кусок начинается, и все строки, начатые внутри него
+                first = max((pos for pos, _ in line_pages if pos <= found), default=0)
+                span = [p for pos, p in line_pages if first <= pos < found + len(piece)]
+                if span:
+                    own.update(page_start=min(span), page_end=max(span))
+            chunks.append(Chunk(id=f"{meta['id']}#{len(chunks)}", text=piece, **own))
 
     # Пункты одного раздела объединяются, пока фрагмент не превысит целевой размер:
     # короткий раздел («2 Классификация отказов» из четырёх пунктов) остаётся целым.

@@ -23,6 +23,7 @@ def test_renumber_starts_from_one_in_order_of_appearance():
 
 def test_merge_and_service_lines():
     assert A._merge_refs("хранится отдельно [4] [1][3][2][4].") == "хранится отдельно [1, 2, 3, 4]."
+    assert A._merge_refs("после снятия карантина [1, 2], [2].") == "после снятия карантина [1, 2]."
     assert A._strip_service_lines("Действие [1].\nОснование: [1].") == "Действие [1]."
 
 
@@ -63,3 +64,28 @@ def test_claim_kept_when_category_matches():
     hits = [make_hit("3.1 При отказе категории А работник немедленно сообщает диспетчеру по телефону 2211.")]
     text, dropped = A._drop_other_cases("Что делать при отказе категории А?", "Сообщить по 2211 [1].", hits)
     assert dropped == 0
+
+
+def test_leading_reference_moves_to_sentence_end():
+    text = "[1] Категория А — отказ (искрение). [2] При отказе нажать кнопку, сообщить по п. 3.1 на 2211."
+    assert A._refs_to_end(text) == ("Категория А — отказ (искрение) [1]. "
+                                    "При отказе нажать кнопку, сообщить по п. 3.1 на 2211 [2].")
+    assert A._refs_to_end("1. [1] Нажать кнопку.") == "1. Нажать кнопку [1]."
+    assert A._refs_to_end("Срок 15 дней [1].") == "Срок 15 дней [1]."
+
+
+def test_garbled_word_is_restored_from_fragment():
+    hits = [make_hit("Продлевать наряд-допуск имеет право работник, выдавший наряд-допуск.")]
+    text, fixed = A._fix_garbled("Продление наряда-одпуска — работнику, выдавшему наряд-одпуск. Допускается 1 раз.",
+                                 hits, "Кто продлевает наряд-допуск?")
+    assert text == "Продление наряда-допуска — работнику, выдавшему наряд-допуск. Допускается 1 раз."
+    assert len(fixed) == 2           # формы слов («работнику», «Допускается») не трогаются
+
+
+def test_neighbor_fragment_inherits_score_of_found_clause():
+    found, weak = make_hit("пункт 3.1", clause="3.1", score=0.9), make_hit("слабый", doc_id="other", score=0.03)
+    found.chunk.id, weak.chunk.id = "doc#4", "other#9"
+    neighbor = make_hit("продолжение пункта 3.1", clause="3.2", score=0.0)
+    neighbor.chunk.id, neighbor.neighbor = "doc#5", True
+    hits = [found, weak, neighbor]
+    assert A._support(neighbor, hits) == 0.9 and A._support(weak, hits) == 0.03

@@ -117,13 +117,17 @@ def main():
     rows = []
     for q in questions:
         must = [expand_dates(m, shift) for m in q.get("must_include", [])]
-        r = ask_with_history(agent, q, args.role)
-        evidence = r.text + " " + json.dumps(r.rows, ensure_ascii=False)
+        r = ask_with_history(agent, q, q.get("role", args.role))     # у вопроса может быть своя роль
+        # факты ищутся в тексте ответа: таблица записей под ним не оправдывает «Записей нет» в тексте
+        evidence = r.text
         row = {"id": q["id"], "group": q.get("group", "основной"), "type": q["type"], "question": q["question"],
                "asked": r.asked or "", "route": r.route, "status": r.status, "answer": r.text,
                "seconds": r.seconds, "best_score": r.stats.get("best_score"),
                "cited": "; ".join(s["label"] for s in r.sources if s["cited"]), "sql": r.sql or "",
-               "db_attempt": f"{r.stats.get('db_status')}: {r.stats.get('db_sql')}" if "db_status" in r.stats else ""}
+               "db_attempt": f"{r.stats.get('db_status')}: {r.stats.get('db_sql')}" if "db_status" in r.stats else "",
+               # исправления постобработки — для просмотра: огрехи генерации и заменённые пересказы записей
+               "fixes": "; ".join(r.stats.get("garbled_fixed", []) + ([f"пересказ записей: {r.stats['retelling_replaced']}"]
+                                                                        if r.stats.get("retelling_replaced") else []))}
         if q["type"] in ("doc", "both"):
             row["facts_ok"] = r.answered and has_facts(evidence, must) and has_none(r.text, q.get("must_exclude", []))
             row["source_ok"] = r.answered and ("source" not in q or source_ok(r.sources, q["source"]))
@@ -180,7 +184,8 @@ def main():
     stamp = time.strftime("%Y-%m-%d %H:%M")
     md = [f"# Результаты на эталонном наборе ({stamp})", "",
           f"Набор: {Path(args.questions).name}, вопросов: {len(rows)}; модель: {settings.llm_model}; "
-          f"порог отказа: {settings.rerank_threshold}; роль: {args.role}", "",
+          f"порог отказа: {settings.rerank_threshold}; "
+          f"роль: {', '.join(sorted({q.get('role', args.role) for q in questions}))}", "",
           "| Метрика | Значение |", "|---|---|"]
     md += [f"| {k} | {v} |" for k, v in m.items()]
     md += ["", "По группам вопросов:", "",

@@ -149,8 +149,12 @@ def load_conversation(login: str, conv_id: str) -> dict | None:
 
 
 def save_conversation(login: str, conv: dict) -> None:
-    if conv["items"] and conv["title"] == "Новый диалог":
-        conv["title"] = conv["items"][0]["question"][:60]
+    items = conv["items"]
+    if items and (conv["title"] == "Новый диалог" or conv.get("title_info")):
+        # название — по первому настоящему вопросу, а не по «Привет» или «Что ты умеешь?»
+        real = next((i for i in items if i.get("status") != "info"), None)
+        conv["title"] = (real or items[0])["question"][:60]
+        conv["title_info"] = real is None
     conv["updated"] = time.strftime("%Y-%m-%d %H:%M")
     conv["items"] = conv["items"][-HISTORY_LIMIT:]
     path = _conv_dir(login) / f"{_safe(conv['id'])}.json"
