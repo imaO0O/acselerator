@@ -78,6 +78,9 @@ def main() -> int:
     agent = Agent()
     docs = {c.doc_id for c in agent.index.chunks}
     print(f"   ✓ документов: {len(docs)}, фрагментов: {len(agent.index.chunks)}")
+    from kbagent import demo_db
+    if settings.db_path == demo_db.DB:
+        demo_db.ensure_current()          # демо-база создаётся и обновляет даты от сегодняшнего дня
     if not settings.db_path.exists():
         problems.append(f"нет учётной базы {settings.db_path}")
 

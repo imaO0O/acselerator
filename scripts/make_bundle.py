@@ -6,7 +6,7 @@
     python scripts/make_bundle.py E:\\agent_bundle --no-models  без моделей — проверить сборку и установку
 
 В папке поставки:
-    agent\\            код, документы базы знаний, индекс, модели, llama.cpp (видеокарта NVIDIA), языки распознавания
+    agent\\            код, документы базы знаний, индекс, документы для показа, модели, llama.cpp (видеокарта NVIDIA), языки распознавания
     llama-cpu\\        llama.cpp для компьютера без видеокарты NVIDIA (install.bat подставит сам)
     wheels\\           пакеты Python для установки без интернета
     python-3.12.exe   установщик Python (если на компьютере его нет)
@@ -111,8 +111,10 @@ def main() -> None:
                              capture_output=True, check=True).stdout
     zipfile.ZipFile(io.BytesIO(archive)).extractall(agent)
 
-    print("2. Индекс, языки распознавания, llama.cpp" + ("" if args.no_models else ", модели"))
-    for part in ["data/index", "tools/tessdata", "tools/llama.cpp"] + ([] if args.no_models else ["models"]):
+    print("2. Индекс, документы для показа, языки распознавания, llama.cpp" + ("" if args.no_models else ", модели"))
+    if not (ROOT / "data" / "show").exists():
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "make_show_docs.py")], check=True)
+    for part in ["data/index", "data/show", "tools/tessdata", "tools/llama.cpp"] + ([] if args.no_models else ["models"]):
         copy(ROOT / part, agent / part)
         print(f"   {part}")
 
