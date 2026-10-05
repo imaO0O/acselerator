@@ -1,3 +1,7 @@
 @echo off
 cd /d "%~dp0.."
-python scripts\run_chat.py
+if exist .venv\Scripts\python.exe (
+    .venv\Scripts\python scripts\run_chat.py
+) else (
+    python scripts\run_chat.py
+)
