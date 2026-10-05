@@ -26,6 +26,7 @@ CHAT_CSS = """
 <style>
 [data-testid="stMainBlockContainer"], [data-testid="stBottomBlockContainer"] { max-width: 980px; }
 [class*="st-key-sources"] button { padding: .2rem .7rem; min-height: 0; justify-content: flex-start; text-align: left; }
+[class*="st-key-sources"] button > div { justify-content: flex-start; }
 [class*="st-key-sources"] button p { font-size: .84rem; }
 [class*="st-key-conv-"] button, [class*="st-key-conv-"] button * { justify-content: flex-start; text-align: left; }
 [class*="st-key-conv-"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .88rem; }
@@ -86,7 +87,16 @@ def sidebar() -> str:
         with st.popover("Где искать ответ", icon=":material/tune:", use_container_width=True):
             mode = st.radio("Где искать ответ", list(ROUTES), key="route_mode", label_visibility="collapsed",
                             help="Обычно агент сам выбирает: документы, учётная база или оба источника")
+            if ctx()["is_admin"]:
+                st.toggle("Режим показа", key="show_mode",
+                          help="Скрыть служебные блоки администратора (найденные фрагменты, запрос к базе) — "
+                               "для показа и записи экрана")
     return ROUTES[mode]
+
+
+def _debug() -> bool:
+    """Служебные блоки — администратору, кроме режима показа."""
+    return ctx()["is_admin"] and not st.session_state.get("show_mode")
 
 
 # ---------- ответ ----------
@@ -197,7 +207,7 @@ def render_answer(item: dict, i: int) -> None:
                 st.dataframe(df, hide_index=True, use_container_width=True)
         else:
             st.dataframe(df, hide_index=True, use_container_width=True)
-        if ctx()["is_admin"] and item.get("sql"):
+        if _debug() and item.get("sql"):
             with st.expander("Запрос к учётной базе"):
                 st.code(item["sql"], language="sql")
 
@@ -209,7 +219,7 @@ def render_answer(item: dict, i: int) -> None:
                              icon=":material/description:", use_container_width=True):
                     show_source(s, f"{uid}-{s['n']}")
     other = [s for s in item.get("sources", []) if not s["cited"]]
-    if ctx()["is_admin"] and other and item["status"] == "answer":
+    if _debug() and other and item["status"] == "answer":
         with st.expander("Другие найденные фрагменты (видно администратору)"):
             for s in other:
                 st.caption(f"[{s['n']}] {s['label']} — релевантность {s['score']}")
@@ -256,6 +266,8 @@ def _hero() -> None:
 
 def chat_page() -> None:
     inject_css(CHAT_CSS)
+    if st.query_params.get("show") == "1":      # ссылка для записи экрана: сразу в режиме показа
+        st.session_state.show_mode = True
     route = sidebar()
     conv = _conv()
     items = conv["items"]
