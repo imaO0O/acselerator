@@ -12,6 +12,7 @@ from kbagent import auth
 from kbagent.config import settings
 from kbagent.actions import ACTIONS, load_actions
 from kbagent.gaps import find_gaps
+from kbagent.editions import compare
 from kbagent.database import display
 from kbagent.ingest import ocr_available
 from kbagent.uploads import add_upload, approve_upload, documents, list_uploads, remove_upload
@@ -91,6 +92,10 @@ def security() -> None:
     records = load_actions()
     st.caption("Кто, что и когда сделал: входы и неудачные попытки входа, загрузка, утверждение и удаление "
                "документов, выдача ключей API. Журнал только дописывается; хранится в logs/actions.jsonl на сервере.")
+    st.caption(("Персональные данные в журнале вопросов и оценках (телефоны, почта, паспорт, СНИЛС, ФИО полностью) "
+                "маскируются. " if settings.log_mask_pii else "Маскирование персональных данных выключено. ")
+               + (f"Журнал вопросов хранится {settings.log_retention_days} дней."
+                  if settings.log_retention_days else "Срок хранения журнала вопросов не ограничен."))
     day_ago = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 86400))
     recent = [r for r in records if r["time"] >= day_ago]
     c1, c2, c3 = st.columns(3)
@@ -167,6 +172,11 @@ def docs() -> None:
                         notices.append(("warning", f"Заменён ранее загруженный «{res['title']}»"))
                     if replaces:
                         notices.append(("info", f"Прежняя редакция «{active[replaces]}» отменена"))
+                        cmp = compare(replaces, res["id"])
+                        notices.append(("info", f"По сравнению с прежней редакцией: изменено пунктов — "
+                                                f"{cmp.count('changed')}, добавлено — {cmp.count('added')}, "
+                                                f"исключено — {cmp.count('removed')}. Подробно — в чате: "
+                                                f"«Что изменилось в {res['title']}?»"))
                 except Exception as e:  # noqa: BLE001 — показать администратору причину
                     notices.append(("error", f"«{f.name}»: {e}"))
                 bar.empty()

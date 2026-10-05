@@ -9,6 +9,7 @@ from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ct
                            health, inject_css, page_png)
 from kbagent import auth
 from kbagent.database import column_label, display
+from kbagent.export import answer_docx
 from kbagent.preview import source_path
 from kbagent.uploads import KIND_PENDING
 
@@ -17,7 +18,7 @@ EXAMPLES = [
     "На какой срок выдаётся наряд-допуск?",
     "Можно ли выдать в производство партию П-2609-04?",
     "У каких средств измерений истёк срок поверки?",
-    "Какие документы есть про паяльные станции?",
+    "Что изменилось в новой редакции СТП ДП-02?",
     "Сколько стоит поверка одного осциллографа?",
 ]
 ROUTES = {"Автоматически": "auto", "Только документы": "documents", "Только учётная база": "database"}
@@ -135,15 +136,6 @@ def show_source(s: dict, key: str) -> None:
                            key=f"dl-{key}", icon=":material/download:")
 
 
-def _answer_md(item: dict) -> str:
-    lines = [f"# Вопрос\n\n{item['question']}\n", f"# Ответ\n\n{item['text']}\n"]
-    cited = [s for s in item.get("sources", []) if s["cited"]]
-    if cited:
-        lines.append("# Источники\n\n" + "\n".join(f"{s['n']}. {s['label']}" for s in cited) + "\n")
-    lines.append(f"_{APP_NAME}, {item.get('at', time.strftime('%d.%m.%Y %H:%M'))}_\n")
-    return "\n".join(lines)
-
-
 def _unique(labels: list[str]) -> list[str]:
     seen, out = {}, []
     for lab in labels:
@@ -242,8 +234,10 @@ def render_answer(item: dict, i: int) -> None:
             else:
                 st.caption("Оценка: " + ("👍" if item["feedback"] == 1 else "👎"))
     if item["status"] != "info":
-        right.download_button("Скачать", data=_answer_md(item), file_name=f"otvet-{i + 1}.md", mime="text/markdown",
-                              key=f"md-{uid}", icon=":material/download:", type="tertiary")
+        right.download_button("В Word", data=answer_docx(item, APP_NAME, ctx()["name"]), file_name=f"otvet-{i + 1}.docx",
+                              mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                              key=f"md-{uid}", icon=":material/download:", type="tertiary",
+                              help="Ответ со ссылками на источники — документом Word")
     if item.get("feedback") == 0 and not item.get("comment"):
         st.text_input("Что не так с ответом? (необязательно)", key=f"cm-{uid}", on_change=_on_comment,
                       args=(i, f"cm-{uid}"))
@@ -256,6 +250,7 @@ def _hero() -> None:
     st.markdown(f"### {APP_NAME}")
     st.markdown("Отвечаю по регламентам, инструкциям, ГОСТам и данным учёта предприятия — со ссылкой "
                 "на документ, пункт и страницу. Если ответа в источниках нет, так и скажу.")
+    st.caption("Приложите к сообщению документ Word (скрепка в поле ввода) — проверю оформление по ГОСТ Р 7.0.97.")
     st.caption("Например:")
     cols = st.columns(2)
     for k, q in enumerate(EXAMPLES):
@@ -272,8 +267,12 @@ def chat_page() -> None:
     conv = _conv()
     items = conv["items"]
 
-    question = st.chat_input("Спросите о регламентах, инструкциях или данных учёта")
-    question = question or st.session_state.pop("pending", None)
+    sent = st.chat_input("Спросите о регламентах, инструкциях или данных учёта — или приложите документ Word "
+                         "для нормоконтроля", accept_file=True, file_type=["docx"])
+    attached = sent.files[0] if sent and sent.files else None
+    question = (sent.text if sent else None) or st.session_state.pop("pending", None)
+    if attached is not None:
+        question = f"{(question or '').strip() or 'Проверь оформление документа'} · {attached.name}"
     if question and items and items[-1]["question"] == question and time.time() - items[-1].get("ts", 0) < 10:
         question = None          # двойное нажатие — тот же вопрос только что задан
 
@@ -290,16 +289,20 @@ def chat_page() -> None:
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(question)
     with st.chat_message("assistant", avatar=LOGO):
-        if not health()["llm"]:
+        if attached is None and not health()["llm"]:      # нормоконтролю модель не нужна
             st.error("Сервис ответов временно недоступен. Попробуйте через минуту или сообщите администратору.",
                      icon=":material/cloud_off:")
             return
         context = [{"question": h.get("asked") or h["question"], "text": h["text"],
                     "docs": [s["doc_id"] for s in h.get("sources", []) if s["cited"]]} for h in items[-3:]]
         holder = st.empty()
-        with holder.status("Ищу ответ…") as status:
-            r = get_agent().ask(question, role=ctx()["role"], route=route, history=context or None,
-                                user=ctx()["login"], on_step=lambda msg: status.update(label=msg))
+        with holder.status("Проверяю оформление…" if attached is not None else "Ищу ответ…") as status:
+            if attached is not None:
+                r = get_agent().normocontrol(attached.name, attached.getvalue(), role=ctx()["role"],
+                                             question=question.rsplit(" · ", 1)[0], user=ctx()["login"])
+            else:
+                r = get_agent().ask(question, role=ctx()["role"], route=route, history=context or None,
+                                    user=ctx()["login"], on_step=lambda msg: status.update(label=msg))
         holder.empty()                 # этапы нужны, пока идёт ответ; после — не загромождают диалог
         item = {"question": question, "asked": r.asked, "role": ctx()["role"], "route": r.route,
                 "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,

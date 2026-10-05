@@ -143,3 +143,37 @@ def test_actions_journal_records_who_did_what(tmp_settings):
     records = load_actions()
     assert [r["action"] for r in records] == ["login_failed", "upload"]
     assert records[1]["user"] == "admin" and records[1]["target"] == "РИ ДП-05-2026"
+
+
+def test_personal_data_is_masked_but_work_details_stay(tmp_settings):
+    from kbagent.privacy import mask
+    text = ("Иванов Пётр Сергеевич, тел. +7 (912) 345-67-89, почта p.ivanov@zavod.ru, паспорт 4510 123456, "
+            "СНИЛС 112-233-445 95. Ответственный — Белов И. Н., звонить диспетчеру 2211.")
+    masked = mask(text)
+    for secret in ["Пётр Сергеевич", "345-67-89", "p.ivanov", "123456", "112-233-445"]:
+        assert secret not in masked
+    assert "Белов И. Н." in masked and "2211" in masked
+
+
+def test_old_journal_records_are_pruned(tmp_settings, tmp_path):
+    import json
+    from kbagent.privacy import prune
+    log = tmp_path / "audit.jsonl"
+    log.write_text("".join(json.dumps({"time": t, "question": "q"}) + "\n"
+                           for t in ["2020-01-01 10:00:00", "2099-01-01 10:00:00"]), encoding="utf-8")
+    assert prune(log, days=180) == 1
+    assert "2099" in log.read_text(encoding="utf-8") and "2020" not in log.read_text(encoding="utf-8")
+
+
+def test_normocontrol_finds_formatting_errors(tmp_path):
+    import sys
+    from conftest import ROOT
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from make_show_docs import order_docx
+    from kbagent.normocontrol import check_docx
+    bad, good = tmp_path / "bad.docx", tmp_path / "good.docx"
+    order_docx(bad, correct=False)
+    order_docx(good, correct=True)
+    issues = check_docx(bad.read_bytes()).issues
+    assert {i.clause for i in issues} == {"6.1", "3.3", "3.4", "3.5", "5.17", "5.10"}
+    assert check_docx(good.read_bytes()).issues == []

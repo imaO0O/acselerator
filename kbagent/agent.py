@@ -13,6 +13,9 @@ from .answer import answer_from_documents, source_label
 from .cards import build_cards, card_chunk, card_text
 from .config import settings
 from .database import answer_from_database
+from .editions import compare, edition_pairs
+from .normocontrol import GOST_ID, check_docx
+from .privacy import mask, prune
 from .retriever import Hit, Retrieval, retrieve
 from .store import Index
 from .text import tokenize
@@ -59,7 +62,8 @@ RECORD_RE = re.compile(r"\b(?:СИ|ОБ|ЭРИ|КИ|МТ|П)-\d{3,4}(?:-\d{2})?\
 # вопрос о правиле: что делать, можно ли, кто должен… — вместе с номером записи даёт маршрут «оба источника»
 RULE_RE = re.compile(r"можно ли|можно\b|нужно ли|надо ли|требуется ли|положено ли|разрешается|допускается|запрещ|"
                      r"кому (?:звонить|сообщ\w*|обращаться|докладывать)|куда (?:звонить|сообщ\w*|обращаться)|"
-                     r"в какой срок|в течение какого|за какое время|в каком порядке|длится|"
+                     r"в какой срок|в течение какого|за какое время|в каком порядке|длится|как (?:быстро|скоро)|"
+                     r"через (?:сколько|какое время)|"
                      r"сколько стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|"
                      r"сколько\s[^?]*\b(?:нужно|надо|следует|требуется)\b|"     # «сколько штук нужно осмотреть» — расчёт по правилу
                      r"(?:сколько|скока|скоко|сколко)\s+(?:дней|часов|минут|суток|недель|месяцев|лет)\b|"
@@ -81,6 +85,15 @@ DOCS_Q_RE = re.compile(
 SUMMARY_Q_RE = re.compile(
     r"\bо ч[её]м\b|кратк\w* содержани|кратко (?:опиши|перескажи|расскажи)|что за документ|"
     r"что (?:содержит|описывает|устанавливает|регулирует)|для чего (?:нужен|предназначен)", re.I)
+# «Что изменилось в новой редакции СТП ДП-02?» — сравнение редакций по пунктам
+EDITION_Q_RE = re.compile(r"что (?:изменилось|поменялось|нового|изменено)|как\w* изменения|"
+                          r"изменени\w+ (?:в|по сравнению)|(?:сравни|сравнить|сравнение)\w*\s+(?:редакци|верси)|"
+                          r"чем (?:отличается|отличаются)\s+(?:нов\w+|стар\w+|прежн\w+|действующ\w+)\s+(?:редакци|верси)|"
+                          r"отличи\w+ (?:редакций|версий|от прежней|от старой)", re.I)
+EDITION_LIST = 12
+ANAPHORA_RE = re.compile(r"(?:них|ним|ними|их|него|нему|нём|неё|нее|ней|его|ему|им|это|этого|этому|этим|там|тогда)",
+                         re.I)          # сколько добавленных пунктов перечислять, остальные — числом
+
 # Разговорные реплики и вопросы о самом агенте: отвечаем справкой, а не поиском по документам
 GREETING_RE = re.compile(r"^\s*(?:привет\w*|здравствуй\w*|добр\w+\s+(?:день|утро|вечер)|доброе утро|hello|hi|хай)"
                          r"[\s!.,)]*$", re.I)
@@ -263,6 +276,7 @@ class Agent:
     def __init__(self, index: Index | None = None):
         self.index = index or Index.load(settings.index_dir)
         self._cards, self._cards_key = {}, None
+        prune(settings.log_dir / "audit.jsonl")       # журнал вопросов — не дольше срока хранения
 
     # ---------- документы целиком ----------
 
@@ -312,6 +326,125 @@ class Agent:
         status = "answer" if chosen else "no_data"
         return AgentResult(question, role, "documents", status, "\n".join([head] + lines), sources=sources,
                            stats={"catalog": True})
+
+    def answer_editions(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
+        """«Что изменилось в СТП ДП-02?» — изменённые, добавленные и исключённые пункты новой редакции
+        по сравнению с прежней, со ссылками. None — в вопросе нет документа с несколькими редакциями."""
+        pairs = {new: old for new, old in edition_pairs().items()
+                 if new in self.cards and self.cards[new]["access"] in allowed}
+        if not pairs:
+            return None
+        named = named_docs(question, self.cards)
+        old_to_new = {old: new for new, old in pairs.items()}
+        chosen = [d for d in named if d in pairs] + [old_to_new[d] for d in named if d in old_to_new]
+        if not chosen:
+            hits = retrieve(self.index, question, allowed).hits
+            chosen = [h.chunk.doc_id for h in hits if h.chunk.doc_id in pairs][:1]
+        if not chosen:
+            return None
+        new_id = chosen[0]
+        cmp = compare(pairs[new_id], new_id)
+        sources, lines = [], []
+
+        def ref(clause, doc_id, title) -> str:
+            n = len(sources) + 1
+            label = f"{title}, п. {clause.number}" + (f", стр. {clause.page}" if clause.page else "")
+            sources.append({"n": n, "label": label, "text": clause.text, "doc_id": doc_id,
+                            "doc_kind": self.cards.get(doc_id, {}).get("kind", ""), "clause": clause.number,
+                            "page": clause.page, "page_end": clause.page, "cited": True, "score": 1.0})
+            return f"[{n}]"
+
+        changed = [c for c in cmp.changes if c.kind == "changed"]
+        added = [c for c in cmp.changes if c.kind == "added"]
+        removed = [c for c in cmp.changes if c.kind == "removed"]
+        lines.append(f"Новая редакция: {cmp.new_title}. Прежняя (отменена): {cmp.old_title}.\n\n"
+                     f"Изменено пунктов — {len(changed)}, добавлено — {len(added)}, исключено — {len(removed)}, "
+                     f"без изменений — {cmp.unchanged}.")
+        if changed:
+            lines.append("\n**Изменено** (~~было~~ **стало**):")
+            for c in changed:
+                moved = f" (в прежней редакции — п. {c.old.number})" if c.old.number != c.new.number else ""
+                lines.append(f"- п. {c.new.number}{moved}: {c.diff} {ref(c.new, new_id, cmp.new_title)}")
+        if added:
+            lines.append("\n**Добавлено:**")
+            for c in added[:EDITION_LIST]:
+                body = re.sub(r"^\s*\d{1,3}(?:\.\d{1,3})*\.?\s+", "", c.new.text)
+                # добавленные пункты — без кнопок-источников: их много, а сравнить не с чем
+                lines.append(f"- п. {c.new.number}: {body[:220]}{'…' if len(body) > 220 else ''}")
+            if len(added) > EDITION_LIST:
+                lines.append(f"- и ещё пунктов: {len(added) - EDITION_LIST}")
+        if removed:
+            lines.append("\n**Исключено:**")
+            for c in removed:
+                lines.append(f"- п. {c.old.number} прежней редакции: {c.old.text[:220]} "
+                             f"{ref(c.old, cmp.old_id, cmp.old_title)}")
+        if not cmp.changes:
+            lines.append("\nТекст пунктов не изменился.")
+        return AgentResult(question, role, "documents", "answer", "\n".join(lines), sources=sources,
+                           stats={"editions": [cmp.old_id, cmp.new_id]})
+
+    def normocontrol(self, filename: str, data: bytes, role: str = "Администратор", question: str = "",
+                     user: str | None = None) -> "AgentResult":
+        """Проверка оформления приложенного DOCX по ГОСТ Р 7.0.97: замечания со ссылками на пункты стандарта."""
+        t0 = time.time()
+        asked = f"{question.strip() or 'Проверь оформление документа'} · {filename}"
+        try:
+            report = check_docx(data)
+        except Exception:  # noqa: BLE001 — повреждённый или не тот файл
+            result = AgentResult(asked, role, "normo", "error", f"Не удалось прочитать «{filename}» как документ Word "
+                                 "(DOCX). Сохраните его в Word в формате .docx и прикрепите снова.")
+            result.seconds = round(time.time() - t0, 2)
+            self._log(result, user)
+            return result
+
+        def part(number: str) -> tuple[int, ...]:
+            return tuple(int(x) for x in re.findall(r"\d+", number))
+
+        def chunk_for(clause: str):
+            """Фрагмент стандарта с этим пунктом: номера того же уровня («3.4» — в «3.4–3.5», а не в «1–6»),
+            из подходящих — с самым узким диапазоном."""
+            target, found = part(clause), []
+            for c in self.index.chunks:
+                if c.doc_id != GOST_ID or not c.clause:
+                    continue
+                first, _, last = c.clause.partition("–")
+                lo, hi = part(first), part(last or first)
+                if len(lo) == len(hi) == len(target) and lo <= target <= hi:
+                    found.append((len(c.text), c))
+            return min(found, key=lambda x: x[0])[1] if found else None
+
+        sources, refs = [], {}
+
+        def ref(clause: str) -> str:
+            c = chunk_for(clause)
+            if c is None:
+                return f"(п. {clause})"
+            if c.id not in refs:                 # пункты 3.4 и 3.5 в одном фрагменте — одна ссылка
+                refs[c.id] = len(sources) + 1
+                sources.append({"n": refs[c.id], "label": source_label(Hit(c, 1.0, None, None)), "text": c.text,
+                                "doc_id": c.doc_id, "doc_kind": c.doc_kind, "clause": c.clause,
+                                "page": c.page_start, "page_end": c.page_end, "cited": True, "score": 1.0})
+            return f"[{refs[c.id]}]"
+
+        errors = [i for i in report.issues if i.level == "нарушение"]
+        advice = [i for i in report.issues if i.level != "нарушение"]
+        lines = [f"Проверка оформления «{filename}» по ГОСТ Р 7.0.97-2016: нарушений — {len(errors)}, "
+                 f"рекомендаций — {len(advice)}."]
+        if errors:
+            lines += ["\n**Нарушения:**"] + [f"- {i.text} {ref(i.clause)}" for i in errors]
+        if advice:
+            lines += ["\n**Рекомендации:**"] + [f"- {i.text} {ref(i.clause)}" for i in advice]
+        if report.passed:
+            lines.append(f"\n**Соблюдено:** {', '.join(report.passed)}.")
+        if not report.issues:
+            lines.insert(1, "\nЗамечаний к оформлению нет.")
+        lines.append("\nПроверены параметры оформления: формат и поля, шрифт, абзацный отступ, интервалы, выравнивание, "
+                     "нумерация страниц, заголовок к тексту, даты. Реквизиты и содержание проверьте вручную.")
+        result = AgentResult(asked, role, "normo", "answer", "\n".join(lines), sources=sources,
+                             stats={"normocontrol": len(report.issues)})
+        result.seconds = round(time.time() - t0, 2)
+        self._log(result, user)
+        return result
 
     def answer_summary(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
         """«О чём ГОСТ Р 2.105-2019?» — пересказ по карточке документа (область применения и разделы)."""
@@ -487,7 +620,9 @@ class Agent:
         auto = route == "auto"
         result = db_result = a_db = None
         parts = split_parts(asked)
-        if auto and not vague and len(parts) > 1 and not RECORD_RE.search(asked):
+        # часть с местоимением («как быстро на них реагируют») продолжает первую — её не отвечают отдельно
+        if (auto and not vague and len(parts) > 1 and not RECORD_RE.search(asked)
+                and not any(ANAPHORA_RE.search(p) for p in parts[1:])):
             # «Сколько действует наряд-допуск и где лежит флюс?» — одна часть к документам, другая к учёту
             routes = [self.route(p) for p in parts]
             if "database" in routes and set(routes) != {"database"}:
@@ -497,7 +632,12 @@ class Agent:
                 if log:
                     self._log(result, user)
                 return result
-        if route in ("auto", "documents") and DOCS_Q_RE.search(asked):
+        if route in ("auto", "documents") and EDITION_Q_RE.search(asked):
+            step("Сравниваю редакции документа…")
+            result = self.answer_editions(asked, role, allowed)
+        if result is not None:
+            route = "documents"
+        elif route in ("auto", "documents") and DOCS_Q_RE.search(asked):
             step("Ищу подходящие документы в каталоге…")
             result = self.answer_catalog(asked, role, allowed)
             route = "documents"
@@ -606,8 +746,8 @@ class Agent:
     @staticmethod
     def _log(r: AgentResult, user: str | None) -> None:
         settings.log_dir.mkdir(parents=True, exist_ok=True)
-        record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "user": user, "role": r.role, "question": r.question,
-                  "asked": r.asked, "route": r.route, "status": r.status, "answer": r.text, "seconds": r.seconds,
+        record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "user": user, "role": r.role, "question": mask(r.question),
+                  "asked": mask(r.asked), "route": r.route, "status": r.status, "answer": mask(r.text), "seconds": r.seconds,
                   "cited": [s["label"] for s in r.sources if s["cited"]], "sql": r.sql}
         with open(settings.log_dir / "audit.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

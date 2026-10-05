@@ -188,3 +188,16 @@ questions:
     group: неясные
     type: clarify
     question: Что делать?
+  # --- редакции документов ---
+  - id: J37
+    group: редакции
+    type: doc
+    question: Что изменилось в СТП ДП-02?
+    must_include: ["Изменено пунктов", "2211", "30 минут"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}
+  - id: J38
+    group: редакции
+    type: doc
+    question: Какие изменения в новой редакции регламента об отказе оборудования?
+    must_include: ["Изменено пунктов", "2211"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}

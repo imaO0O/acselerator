@@ -170,7 +170,9 @@ def delete_conversation(login: str, conv_id: str) -> None:
 
 def save_feedback(record: dict) -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
-    record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), **record}
+    from .privacy import mask
+    record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+              **{k: mask(v) if k in ("question", "answer", "comment") else v for k, v in record.items()}}
     with open(settings.log_dir / "feedback.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 

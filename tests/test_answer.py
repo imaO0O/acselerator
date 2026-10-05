@@ -105,3 +105,13 @@ def test_ban_without_support_in_fragment_is_dropped():
     assert dropped == 1 and text == "Прибор отключается при перегреве [1]."
     kept, dropped = A._drop_unsupported_bans("Не используйте станцию вблизи горючих газов [1].", hits)
     assert dropped == 0
+
+
+def test_value_of_neighbouring_case_in_one_sentence_is_caught():
+    hits = [make_hit("5.1 Ремонтная служба приступает к работам: по отказам категории А — не позднее 15 минут; "
+                     "по отказам категории Б — не позднее 1 часа; по отказам категории В — в течение 1 рабочего дня.")]
+    q = "В какой срок ремонтная служба приступает к работам при отказе категории Б?"
+    wrong = A._wrong_case_values(q, "При отказе категории Б — не позднее 1 рабочего дня [1].", hits)
+    assert wrong and wrong[1] == "категории Б — не позднее 1 часа"
+    assert A._wrong_case_values(q, "При отказе категории Б — не позднее 1 часа [1].", hits) is None
+    assert A._wrong_case_values("Чем отличаются категории А, Б и В?", "А — 15 минут, В — 1 рабочий день [1].", hits) is None

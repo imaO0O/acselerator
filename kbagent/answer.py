@@ -346,6 +346,58 @@ def _drop_unsupported_bans(text: str, hits: list[Hit]) -> tuple[str, int]:
     return "\n".join(out).strip(), dropped
 
 
+NUM_UNIT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([а-яё]+)", re.I)
+
+
+def _num_units(text: str) -> set[tuple[str, str]]:
+    """«не позднее 1 часа», «15 минут» → {("1", "час"), ("15", "минут")}: число с единицей, по основе слова."""
+    out = set()
+    for num, word in NUM_UNIT_RE.findall(text):
+        stems = tokenize(word)
+        out.add((num.replace(",", "."), stems[0] if stems else word.lower()))
+    return out
+
+
+def _case_segments(question: str, hits: list[Hit]) -> list[tuple[set[str], str]]:
+    """Части предложений, где перечислено несколько случаев одного рода:
+    «по отказам категории А — 15 минут; по отказам категории Б — 1 часа; …» → [({"А"}, «…А — 15 минут; »), …]."""
+    asked = _qualifiers(question)
+    out = []
+    for kind in asked:
+        rx = QUALIFIERS[kind]
+        for h in hits:
+            for sentence in SENTENCE_RE.split(h.chunk.text):
+                marks = list(rx.finditer(sentence))
+                values = [{v.upper() for v in VALUE_RE.findall(m.group(1).upper()) if v.upper() not in {"И", "ИЛИ"}}
+                          for m in marks]
+                if len({frozenset(v) for v in values}) < 2:
+                    continue
+                for i, m in enumerate(marks):
+                    end = marks[i + 1].start() if i + 1 < len(marks) else len(sentence)
+                    segment = sentence[m.start():end]
+                    if ";" in segment:           # «…Б — не позднее 1 часа; по отказам» → до точки с запятой
+                        segment = segment[:segment.rfind(";")]
+                    out.append((values[i], segment))
+    return out
+
+
+def _wrong_case_values(question: str, text: str, hits: list[Hit]) -> tuple[list[str], str] | None:
+    """Срок или число из части предложения про другой случай: спросили о категории Б, а в ответе «1 рабочего дня»
+    из части про категорию В. Возвращает чужие значения и часть предложения про спрошенный случай."""
+    asked = set().union(*_qualifiers(question).values()) if _qualifiers(question) else set()
+    segments = _case_segments(question, hits)
+    if not asked or not segments:
+        return None
+    own = [seg for values, seg in segments if values & asked]
+    if not own:
+        return None
+    own_units = set().union(*(_num_units(seg) for seg in own))
+    other_units = set().union(*(_num_units(seg) for values, seg in segments if not values & asked))
+    answer_units = _num_units(REF_RE.sub("", text))
+    wrong = sorted(f"{n} {w}" for n, w in answer_units & other_units if (n, w) not in own_units)
+    return (wrong, own[0].strip(" ;,.")) if wrong else None
+
+
 def _asked_case(question: str) -> str | None:
     """«категории В» из вопроса «что делать при отказе категории В?»."""
     for rx in QUALIFIERS:
@@ -479,6 +531,25 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
             return Answer("model_refused", "Найденные фрагменты относятся к другому случаю — ответа в документах нет.",
                           hits=hits, stats=stats)
         text = checked
+    mixup = _wrong_case_values(question, text, hits)
+    if mixup:
+        # в одном предложении перечислены случаи (категории А, Б, В), и модель взяла значение соседнего случая
+        stats["case_mixup"] = mixup[0]
+        try:
+            messages += [{"role": "assistant", "content": text},
+                         {"role": "user", "content": "В ответе указано значение для другого случая. "
+                                                     f"Для случая из вопроса во фрагменте сказано: «{mixup[1]}». "
+                                                     "Перепиши ответ по этой части, со ссылкой [n]."}]
+            retry, _ = llm.chat(messages)
+            retry = _strip_service_lines(_clean_refs(retry, _valid_refs(retry, len(hits))))
+        except llm.ModelError:
+            retry = ""
+        if (not retry or NO_DATA in retry or _is_refusal(retry) or _too_short(retry)
+                or _wrong_case_values(question, retry, hits) or not _valid_refs(retry, len(hits))):
+            return Answer("model_refused", "Найденные фрагменты относятся к другому случаю — ответа в документах нет.",
+                          hits=hits, stats=stats)
+        text, valid = retry, _valid_refs(retry, len(hits))
+        stats["case_mixup_fixed"] = True
     checked, bans = _drop_unsupported_bans(text, hits)
     if bans:
         stats["bans_dropped"] = bans

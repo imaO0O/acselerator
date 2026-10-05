@@ -38,6 +38,7 @@ SCENARIO = [
     (ADMIN, "По какому телефону сообщить диспетчеру об отказе оборудования?", None, "answer", ["2211"]),
     (ADMIN, "Какой срок?", None, "clarify", []),
     (ADMIN, "Ты работаешь без интернета?", None, "info", ["интернет"]),
+    (ADMIN, "Что изменилось в СТП ДП-02?", None, "answer", ["Изменено пунктов", "2211"]),
     (ENGINEER, "За сколько дней до истечения срока поверки метролог уведомляет подразделение?", None, "refuse", []),
     (METROLOGIST, "За сколько дней до истечения срока поверки метролог уведомляет подразделение?", None,
      "answer", ["30"]),
@@ -109,7 +110,7 @@ def main() -> int:
         if not good:
             problems.append(f"«{question}» ({role}): ожидалось {expect} {must}, получено {r.status}: {r.text[:120]}")
 
-    print("4. Сцена с загрузкой документа")
+    print("4. Сцены с загрузкой документа и нормоконтролем")
     uploaded = {d["id"] for d in uploads.list_uploads()}
     if uploads.doc_id_for(SHOW_DOCS[0]) in uploaded:
         problems.append("документ для показа загрузки уже загружен — запустите с --reset-show")
@@ -122,6 +123,15 @@ def main() -> int:
     for name in SHOW_DOCS:
         if not (settings.raw_dir.parent / "show" / f"{name}.pdf").exists():
             problems.append(f"нет data/show/{name}.pdf — запустите python scripts/make_show_docs.py")
+    order = settings.raw_dir.parent / "show" / "Prikaz_s_oshibkami.docx"
+    if order.exists():
+        r = agent.normocontrol(order.name, order.read_bytes(), user="eval")
+        good = r.status == "answer" and "нарушений — 6" in r.text
+        print(f"   {'✓' if good else '✗'} нормоконтроль приказа с ошибками: {r.text.splitlines()[0]}")
+        if not good:
+            problems.append(f"нормоконтроль приказа с ошибками: {r.text[:120]}")
+    else:
+        problems.append("нет data/show/Prikaz_s_oshibkami.docx — запустите python scripts/make_show_docs.py")
 
     if args.clean:
         print("5. Диалоги демо-учёток")

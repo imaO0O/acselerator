@@ -108,7 +108,9 @@ def _pdf_pages(path: Path, stats: dict | None = None) -> list[tuple[int, list[st
         boiler = set()
     cleaned = []
     for no, lines in pages:
-        lines = [l for l in lines if l not in boiler and not re.fullmatch(r"\d{1,4}|-\s*\d{1,4}\s*-", l)]
+        # номер страницы — и «Страница 1 из 2» в коротком документе (иначе он прилипает к последнему пункту)
+        lines = [l for l in lines if l not in boiler and not re.fullmatch(
+            r"\d{1,4}|-\s*\d{1,4}\s*-|(?:Страница|Стр\.|Лист)\s*\d{1,4}(?:\s*(?:из|/)\s*\d{1,4})?", l, re.I)]
         cleaned.append((no, join_hyphenated(lines)))
     return cleaned
 

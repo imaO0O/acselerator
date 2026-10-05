@@ -54,6 +54,10 @@ class Settings:
     max_answer_tokens: int = _env("KB_MAX_TOKENS", 500)
     # одинаковый ответ на одинаковый вопрос (без кэша подсказок); на процессоре KB_DETERMINISTIC=0 быстрее
     deterministic: bool = _env("KB_DETERMINISTIC", True)
+    # Персональные данные в журнале вопросов и оценках: маскировать (телефоны, почта, паспорт, СНИЛС, ФИО полностью)
+    log_mask_pii: bool = _env("KB_LOG_MASK_PII", True)
+    # Сколько дней хранить журнал вопросов (0 — без ограничения); журнал действий не чистится
+    log_retention_days: int = _env("KB_LOG_RETENTION_DAYS", 180)
     request_timeout: int = _env("KB_TIMEOUT", 300)
 
     # Роли и доступные им группы документов (разграничение прав, демо)

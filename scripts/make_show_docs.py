@@ -8,7 +8,9 @@
       после загрузки — «260 ± 5 °C» со ссылкой на пункт;
   Prikaz_17_skan.pdf — вымышленный приказ в виде скана (только изображение, без текстового слоя):
       агент распознаёт его и отвечает на «Кто отвечает за пожарную безопасность на участке
-      поверхностного монтажа?».
+      поверхностного монтажа?»;
+  Prikaz_s_oshibkami.docx и Prikaz_ispravlennyy.docx — приказ для нормоконтроля по ГОСТ Р 7.0.97: с типичными
+      ошибками оформления и исправленный (прикрепить к сообщению в чате).
 Сценарий — docs/demo_script.md.
 """
 import sys
@@ -67,6 +69,52 @@ ORDER = {
 }
 
 
+def order_docx(path: Path, correct: bool) -> None:
+    """Приказ для нормоконтроля: с типичными ошибками оформления или оформленный по ГОСТ Р 7.0.97."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Mm, Pt
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Mm(210), Mm(297)
+    sec.left_margin, sec.right_margin = Mm(20 if correct else 15), Mm(10)
+    sec.top_margin, sec.bottom_margin = Mm(20), Mm(20)
+    normal = doc.styles["Normal"]
+    normal.font.name, normal.font.size = "Times New Roman", Pt(14 if correct else 11)
+    normal.paragraph_format.line_spacing = 1.0
+    normal.paragraph_format.space_after = Pt(0)
+
+    def center(text, bold=False):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.add_run(text).bold = bold
+
+    def body(text):
+        p = doc.add_paragraph(text if correct else text.replace(" о ", "  о ", 1))
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY if correct else WD_ALIGN_PARAGRAPH.LEFT
+        p.paragraph_format.first_line_indent = Cm(1.25 if correct else 1.0)
+
+    doc.add_paragraph("ДЕМО. Вымышленный документ для демонстрации нормоконтроля.")
+    center("ООО «Демо-Прибор»")
+    center("ПРИКАЗ", bold=True)
+    doc.add_paragraph(("05.10.2026" if correct else "2026/10/05") + "\t\t\t\t\t\t№ 45")
+    center("г. Рязань")
+    doc.add_paragraph("О создании комиссии по проверке средств измерений" if correct
+                      else "Приказ на создание комиссии по проверке средств измерений")
+    body("В целях проверки состояния и правильности применения средств измерений на производственных участках, "
+         "а также подготовки к плановому аудиту системы менеджмента качества о результатах которого будет доложено "
+         "главному инженеру,")
+    doc.add_paragraph("ПРИКАЗЫВАЮ:")
+    body("1. Создать комиссию по проверке средств измерений в составе: председатель — главный метролог; члены "
+         "комиссии — мастер участка поверхностного монтажа и инженер испытательной лаборатории.")
+    body("2. Комиссии до 30.10.2026 проверить наличие действующих сведений о поверке у всех средств измерений, "
+         "изъять из эксплуатации средства измерений с истёкшим сроком поверки и представить акт о результатах проверки.")
+    body("3. Контроль за исполнением настоящего приказа возложить на главного инженера.")
+    doc.add_paragraph("Директор\t\t\t\t\t\t\tИ. И. Петров")
+    doc.save(path)
+
+
 def as_scan(src: Path, dst: Path, dpi: int = 150) -> None:
     """Страницы PDF — в серые картинки без текстового слоя, как после сканера."""
     doc, out = pymupdf.open(src), pymupdf.open()
@@ -88,3 +136,6 @@ if __name__ == "__main__":
     as_scan(text_pdf, scan)
     text_pdf.unlink()
     print(scan)
+    for name, correct in [("Prikaz_s_oshibkami.docx", False), ("Prikaz_ispravlennyy.docx", True)]:
+        order_docx(SHOW / name, correct)
+        print(SHOW / name)

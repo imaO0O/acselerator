@@ -6,7 +6,8 @@
 
 Входит администратором, в режиме показа (без служебных блоков) задаёт вопросы сценария и снимает
 экраны: пустой экран с примерами, ответ со ссылками, окно источника с выделенным фрагментом,
-«запись + правило», ответ по учёту, честный отказ, встречный вопрос, вопрос об агенте, страницы
+«запись + правило», ответ по учёту, честный отказ, встречный вопрос, вопрос об агенте, сравнение
+редакций, нормоконтроль приложенного приказа, страницы
 «Пробелы в документации», «Качество» и «Безопасность». Перед запуском —
 python scripts/check_demo.py --clean (чистый список диалогов).
 """
@@ -28,7 +29,9 @@ SHOTS = [   # (файл, вопрос, нажать первую кнопку-и
     ("06_chestnyy_otkaz.png", "Сколько стоит поверка одного осциллографа?", False),
     ("07_utochnenie.png", "Какой срок?", False),
     ("08_bez_interneta.png", "Ты работаешь без интернета?", False),
+    ("12_redakcii.png", "Что изменилось в СТП ДП-02?", False),
 ]
+NORMO = ("13_normokontrol.png", ROOT / "data" / "show" / "Prikaz_s_oshibkami.docx")
 ADMIN_TABS = [("09_probely.png", "Пробелы в документации"), ("10_kachestvo.png", "Качество"),
               ("11_bezopasnost.png", "Безопасность")]
 
@@ -40,10 +43,17 @@ def wait_answer(page) -> None:
         """() => {
             const msgs = document.querySelectorAll('[data-testid=stChatMessage]');
             const last = msgs[msgs.length - 1];
-            return last && /Документы|Учётная база|База и документы|Справка/.test(last.innerText)
+            return last && /Документы|Учётная база|База и документы|Справка|Нормоконтроль/.test(last.innerText)
                 && !document.querySelector('[data-stale=true]') && !document.body.innerText.includes('Ищу ответ');
         }""", timeout=90000)
     time.sleep(1.5)
+
+
+def to_question(page) -> None:
+    """Кадр — с начала: вопрос сотрудника вверху экрана, под ним ответ."""
+    page.evaluate("""() => { const m = document.querySelectorAll('[data-testid=stChatMessage]');
+                             if (m.length >= 2) m[m.length - 2].scrollIntoView({block: 'start'}); }""")
+    time.sleep(0.8)
 
 
 def new_dialog(page) -> None:
@@ -77,8 +87,7 @@ def main() -> None:
                 box.fill(question)
                 box.press("Enter")
                 wait_answer(page)
-                page.mouse.wheel(0, -2000)
-                time.sleep(0.5)
+                to_question(page)
             if open_source:
                 page.locator("[class*=st-key-sources] button").first.click()
                 page.wait_for_selector("[role=dialog] img", timeout=30000)
@@ -88,6 +97,19 @@ def main() -> None:
             if open_source:
                 page.keyboard.press("Escape")
                 time.sleep(1)
+
+        name, path = NORMO                    # нормоконтроль: документ Word приложен к сообщению
+        if path.exists():
+            new_dialog(page)
+            page.locator("[data-testid=stChatInput] input[type=file]").set_input_files(str(path))
+            time.sleep(1)
+            box = page.get_by_placeholder("Спросите о регламентах")
+            box.fill("Проверь оформление")
+            box.press("Enter")
+            wait_answer(page)
+            to_question(page)
+            page.screenshot(path=OUT / name)
+            print(name)
 
         page.goto(f"{URL}/admin")
         page.wait_for_selector("text=Администрирование", timeout=30000)
