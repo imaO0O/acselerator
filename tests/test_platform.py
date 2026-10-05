@@ -109,3 +109,14 @@ def test_continuation_of_long_clause_gets_its_own_pages():
     chunks = ingest._chunks(ingest._units(pages), meta)
     assert len(chunks) >= 3 and chunks[0].page_start == 1
     assert chunks[-1].page_start >= 2 and chunks[-1].page_end == 3     # не «стр. 1–3» у последнего куска
+
+
+def test_uploaded_document_title_is_taken_from_its_text(tmp_path):
+    from docx import Document
+    from kbagent.uploads import guess_title
+    doc = Document()
+    for line in ["ООО «Демо-Прибор»", "РИ ДП-05-2026", "ОБСЛУЖИВАНИЕ УСТАНОВКИ СЕЛЕКТИВНОЙ ПАЙКИ", "1.1 Текст пункта."]:
+        doc.add_paragraph(line)
+    path = tmp_path / "RI-DP-05.docx"
+    doc.save(path)
+    assert guess_title(path) == "РИ ДП-05-2026 «Обслуживание установки селективной пайки»"

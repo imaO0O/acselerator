@@ -16,6 +16,7 @@ __pycache__/
 
 # документы, загруженные через чат (могут быть конфиденциальными)
 data/raw/uploaded/
+data/show/
 
 # демо-база пересоздаётся при запуске с датами от текущего дня (scripts/make_demo_db.py)
 data/demo_db/uchet.sqlite

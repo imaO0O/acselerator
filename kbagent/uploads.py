@@ -39,6 +39,53 @@ def doc_id_for(filename: str) -> str:
     return f"upl_{stem or 'document'}"
 
 
+CODE_LINE_RE = re.compile(r"^(?:СТП|СТО|РИ|ТИ|ИОТ|ПИ|ГОСТ(?:\s*Р)?|Приказ|ПРИКАЗ|Распоряжение|РАСПОРЯЖЕНИЕ|Положение|"
+                          r"ПОЛОЖЕНИЕ)\b[^\n]{0,60}\d", re.I)
+BOILERPLATE_RE = re.compile(r"(?:федеральн\w*|национальн\w*|министерств\w*|ооо|ао|пао|зао|демо)\b", re.I)
+ABBREVIATIONS = {"ЭРИ", "СИ", "ОТК", "БВК", "ЕСКД", "ДП", "ГОСТ", "РИ", "СТП", "ПОС", "ESD", "MSL", "ЭСР", "ТУ", "ОТ"}
+
+
+def _sentence_case(line: str) -> str:
+    words = [w if w.strip("«»(),.") in ABBREVIATIONS else w.lower() for w in line.split()]
+    text = " ".join(words)
+    return text[:1].upper() + text[1:]
+
+
+def guess_title(path: Path) -> str | None:
+    """Название из самого документа: строка с обозначением («РИ ДП-05-2026», «Приказ № 17 от …») и следующая
+    за ней строка прописными («ОБСЛУЖИВАНИЕ УСТАНОВКИ…») → «РИ ДП-05-2026 «Обслуживание установки…»».
+    У скана первая страница распознаётся. Не нашлось — None (тогда название по имени файла)."""
+    from .ingest import _page_text      # распознавание скана — как при разборе документа
+    from .text import normalize
+    try:
+        if path.suffix.lower() == ".pdf":
+            import pymupdf
+            with pymupdf.open(path) as doc:
+                text = _page_text(doc[0], {}) if len(doc) else ""
+        else:
+            from docx import Document
+            text = "\n".join(p.text for p in Document(path).paragraphs[:25])
+    except Exception:  # noqa: BLE001 — название не критично, документ всё равно добавляется
+        return None
+    lines = [ln.strip() for ln in normalize(text).splitlines() if ln.strip()][:30]
+    code = next((i for i, ln in enumerate(lines) if CODE_LINE_RE.match(ln)), None)
+    start = code + 1 if code is not None else 0
+    title = []
+    for ln in lines[start:start + 6]:
+        letters = [c for c in ln if c.isalpha()]
+        if len(letters) >= 4 and sum(c.isupper() for c in letters) / len(letters) > 0.8:
+            title.append(ln)
+        elif title:
+            break
+    name = _sentence_case(" ".join(title)) if title else ""
+    if code is not None and name:
+        return f"{lines[code]} «{name}»"[:200]
+    if code is not None:
+        return lines[code]
+    # без обозначения — только если это не шапка ведомства или организации
+    return name if name and not BOILERPLATE_RE.match(name) else None
+
+
 def _sync_access(index: Index, doc_id: str) -> None:
     """Приводит доступ документа в индексе к каталогу (действует / отменён)."""
     info = load_catalog(settings.raw_dir).get(doc_id)
@@ -64,6 +111,7 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
             old.unlink()
     path = UPLOAD_DIR / f"{doc_id}{ext}"
     path.write_bytes(data)
+    title = guess_title(path) or title       # «РИ ДП-05-2026 «Обслуживание…»», а не имя файла латиницей
 
     entry = {"id": doc_id, "title": title, "kind": KIND_PENDING, "access": access,
              "uploaded_by": user, "uploaded_at": time.strftime("%Y-%m-%d %H:%M"), "approved": False}

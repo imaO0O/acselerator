@@ -89,3 +89,19 @@ def test_neighbor_fragment_inherits_score_of_found_clause():
     neighbor.chunk.id, neighbor.neighbor = "doc#5", True
     hits = [found, weak, neighbor]
     assert A._support(neighbor, hits) == 0.9 and A._support(weak, hits) == 0.03
+
+
+def test_latin_letter_inside_russian_word_is_fixed():
+    hits = [make_hit("Срок действия наряда-допуска — не более 15 календарных дней.")]
+    text, fixed = A._fix_garbled("Срок действия наряда-доcпуска — 15 дней.", hits, "Срок наряда?")
+    assert "наряда-допуска" in text and fixed
+
+
+def test_ban_without_support_in_fragment_is_dropped():
+    hits = [make_hit("Защита от перегрева. Если температура превышает лимит, прибор отключается. "
+                     "Не используйте станцию вблизи горючих газов.")]
+    text, dropped = A._drop_unsupported_bans(
+        "Прибор отключается при перегреве [1]. Запуск станции в обход защиты не допускается [1].", hits)
+    assert dropped == 1 and text == "Прибор отключается при перегреве [1]."
+    kept, dropped = A._drop_unsupported_bans("Не используйте станцию вблизи горючих газов [1].", hits)
+    assert dropped == 0

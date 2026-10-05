@@ -12,6 +12,7 @@ from pathlib import Path
 import pymupdf
 
 from .config import settings
+from .ingest import ocr_available
 
 TOKEN_RE = re.compile(r"[a-zа-яё]+|\d+", re.I)
 MIN_RUN = 3      # совпадение короче — случайное («в соответствии с»)
@@ -90,6 +91,10 @@ def render_page(path: str, page_no: int, fragment: str, zoom: float = 1.6, crop:
     doc = pymupdf.open(path)
     page = doc[page_no - 1]
     words = page.get_text("words")
+    if not words and page.get_images() and ocr_available():
+        # скан: слова и их места — из распознавания, как при загрузке документа
+        tp = page.get_textpage_ocr(language="rus+eng", dpi=300, full=True, tessdata=str(settings.tessdata_dir))
+        words = page.get_text("words", textpage=tp)
     marked = _marked_words(words, fragment)
     # выделение — непрерывными отрезками внутри строки
     runs: list[pymupdf.Rect] = []
@@ -97,8 +102,12 @@ def render_page(path: str, page_no: int, fragment: str, zoom: float = 1.6, crop:
         w = words[i]
         r = pymupdf.Rect(w[:4])
         prev = i - 1
-        if runs and prev in marked and (words[prev][5], words[prev][6]) == (w[5], w[6]):
-            runs[-1] = runs[-1] | r
+        last = runs[-1] if runs else None
+        # та же строка: по номеру строки, а у распознанного скана — по положению (номера там у каждого слова свои)
+        same_line = last is not None and ((words[prev][5], words[prev][6]) == (w[5], w[6]) or (
+            abs((last.y0 + last.y1) - (r.y0 + r.y1)) < 0.5 * r.height and 0 <= r.x0 - last.x1 < 2 * r.height))
+        if prev in marked and same_line:
+            runs[-1] = last | r
         else:
             runs.append(r)
     for r in runs:

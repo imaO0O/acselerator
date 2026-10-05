@@ -108,11 +108,14 @@ SERVICE_LINE_RE = re.compile(r"^\s*[-*]?\s*(?:основани[ея]|источ�
 
 
 OPEN_QUESTION_RE = re.compile(r"^\s*(?:а\s+)?(?:что|как\w*|где|когда|кто|кому|сколько|куда|чем|зачем|"
-                              r"(?:в|на|по|за|с|до|при)\s+как\w+)\b", re.I)
+                              r"(?:в|на|по|за|с|до|при)\s+как\w+|what|how|where|when|who|which|why)\b", re.I)
 REF_RUN_RE = re.compile(r"\[\d+(?:\s*[,–-]\s*\d+)*\](?:[\s.,]*\[\d+(?:\s*[,–-]\s*\d+)*\])+")   # и «[1, 2], [2]»
 
 
 WORD_RE = re.compile(r"[А-Яа-яЁё]{6,}")
+# латинская буква внутри русского слова («наряда-доcпуска»): похожие латинские буквы — на русские
+MIXED_RE = re.compile(r"\b(?=[A-Za-zА-Яа-яЁё]*[А-Яа-яЁё])(?=[A-Za-zА-Яа-яЁё]*[A-Za-z])[A-Za-zА-Яа-яЁё]+\b")
+HOMOGLYPHS = str.maketrans("aceopxykACEOPXYKMTHB", "асеорхукАСЕОРХУКМТНВ")
 
 
 def _one_edit(a: str, b: str) -> bool:
@@ -133,6 +136,24 @@ def _fix_garbled(text: str, hits: list[Hit], question: str) -> tuple[str, list[s
     words = {w.lower().replace("ё", "е") for w in WORD_RE.findall(source)}
     stems = {tokenize(w)[0] for w in words if tokenize(w)}
     fixed = []
+
+    def known(w: str) -> bool:
+        low = w.lower().replace("ё", "е")
+        return low in words or bool(tokenize(low) and tokenize(low)[0] in stems)
+
+    def unmix(m):
+        word = m.group(0)
+        plain = word.translate(HOMOGLYPHS)
+        if not re.search(r"[A-Za-z]", plain) and not known(plain):
+            # латинская буква вставлена лишней («до» + «c» + «пуска»): убираем её, если слово становится знакомым
+            for i, ch in enumerate(word):
+                if re.match(r"[A-Za-z]", ch) and known(word[:i] + word[i + 1:]):
+                    plain = (word[:i] + word[i + 1:]).translate(HOMOGLYPHS)
+                    break
+        if plain != word:
+            fixed.append(f"{word} → {plain}")
+        return plain
+    text = MIXED_RE.sub(unmix, text)
 
     def repl(m):
         word = m.group(0)
@@ -189,6 +210,10 @@ def _strip_service_lines(text: str) -> str:
 ACTION_Q_RE = re.compile(r"что делать|как (?:действовать|поступить|быть)|порядок|какие (?:требования|правила)|"
                          r"можно ли|разрешается|допускается|что нужно|что необходимо|обязан", re.I)
 PROHIBIT_RE = re.compile(r"запрещ|не допускается|не разрешается|недопустим", re.I)
+# запрет в ответе и запрет во фрагменте («не используйте…», «не допускается…»)
+BAN_CLAIM_RE = re.compile(r"запрещ|не допуска|не разреша|недопустим|нельзя|не следует|не рекоменду", re.I)
+BAN_SOURCE_RE = re.compile(r"запрещ|не допуска|не разреша|недопустим|нельзя|не следует|не рекоменду|"
+                           r"\bне\s+[а-яё]+(?:те|йте)\b|\bне\s+(?:вскрывать|включать|прикасаться|использовать)", re.I)
 SENTENCE_RE = re.compile(r"(?<=[.!?»])\s+(?=(?:\d{1,3}(?:\.\d{1,3})*\.?\s+)?[А-ЯЁA-Z«])")
 
 
@@ -296,6 +321,48 @@ def _drop_other_cases(question: str, text: str, hits: list[Hit]) -> tuple[str, i
     return "\n".join(kept).strip(), dropped
 
 
+def _drop_unsupported_bans(text: str, hits: list[Hit]) -> tuple[str, int]:
+    """Запрет в ответе, которого во фрагментах нет («запуск в обход защиты от перегрева не допускается»,
+    а во фрагменте — только как работает защита): модель достроила правило от себя, предложение убирается.
+    Запрет подтверждён, если во фрагменте, на который он ссылается, есть предложение-запрет о том же."""
+    out, dropped = [], 0
+    for line in text.split("\n"):
+        line_refs = {n for g in REF_RE.findall(line) for n in _ref_numbers(g) if 1 <= n <= len(hits)}
+        kept = []
+        for sentence in re.split(r"(?<=[.!?])\s+", line):
+            if not BAN_CLAIM_RE.search(sentence):
+                kept.append(sentence)
+                continue
+            refs = {n for g in REF_RE.findall(sentence) for n in _ref_numbers(g) if 1 <= n <= len(hits)} or line_refs
+            words = set(tokenize(REF_RE.sub("", sentence)))
+            bans = [set(tokenize(s)) for n in refs for s in SENTENCE_RE.split(hits[n - 1].chunk.text)
+                    if BAN_SOURCE_RE.search(s)]
+            if bans and (len(words) <= 2 or any(len(words & b) >= max(2, 0.4 * len(words)) for b in bans)):
+                kept.append(sentence)
+            else:
+                dropped += 1
+        if any(k.strip() for k in kept) or not line.strip():
+            out.append(" ".join(kept))
+    return "\n".join(out).strip(), dropped
+
+
+def _asked_case(question: str) -> str | None:
+    """«категории В» из вопроса «что делать при отказе категории В?»."""
+    for rx in QUALIFIERS:
+        m = rx.search(question)
+        if m:
+            return m.group(0).strip(" ,")
+    return None
+
+
+def _case_in_hits(question: str, hits: list[Hit]) -> bool:
+    """Есть ли во фрагментах предложение именно о спрошенном случае."""
+    asked = _qualifiers(question)
+    return any(values & asked.get(kind, set())
+               for h in hits for sentence in SENTENCE_RE.split(h.chunk.text)
+               for kind, values in _qualifiers(sentence).items())
+
+
 def verify(question: str, text: str, hits: list[Hit], cited: list[int]) -> bool:
     fragments = "\n\n".join(f"[{n}] {hits[n - 1].chunk.doc_title}: {hits[n - 1].chunk.text[:1200]}" for n in cited)
     out, _ = llm.chat([{"role": "user", "content": VERIFY_PROMPT.format(
@@ -389,19 +456,44 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
     if dropped:
         # в вопросе условие (категория Б), а часть пунктов опирается на требования для другого случая
         stats["claims_dropped"] = dropped
-        if dropped:
-            valid = _valid_refs(checked, len(hits))
-            if not valid or _too_short(checked):
-                return Answer("model_refused", "Найденные фрагменты относятся к другому случаю — ответа в документах нет.",
-                              hits=hits, stats=stats)
-            text = checked
+        valid = _valid_refs(checked, len(hits))
+        case = _asked_case(question)
+        if (not valid or _too_short(checked)) and case and _case_in_hits(question, hits):
+            # всё написанное — о другом случае, а пункт о спрошенном во фрагментах есть («категория В»:
+            # «по отказам категории В — в течение 1 рабочего дня»): одна попытка с прямым указанием
+            try:
+                messages += [{"role": "assistant", "content": text},
+                             {"role": "user", "content": f"Вопрос только про случай «{case}». Приведи из фрагментов "
+                                                         "требования, которые относятся к этому случаю или ко всем "
+                                                         "случаям сразу, со ссылками [n]. Требования для других "
+                                                         "случаев не приводи."}]
+                retry, _ = llm.chat(messages)
+                retry = _strip_service_lines(_clean_refs(retry, _valid_refs(retry, len(hits))))
+                again, _ = _drop_other_cases(question, retry, hits)
+                if NO_DATA not in retry and not _is_refusal(again) and not _too_short(again):
+                    checked, valid = again, _valid_refs(again, len(hits))
+                    stats["case_retry"] = True
+            except llm.ModelError:
+                pass
+        if not valid or _too_short(checked):
+            return Answer("model_refused", "Найденные фрагменты относятся к другому случаю — ответа в документах нет.",
+                          hits=hits, stats=stats)
+        text = checked
+    checked, bans = _drop_unsupported_bans(text, hits)
+    if bans:
+        stats["bans_dropped"] = bans
+        valid = _valid_refs(checked, len(hits))
+        if not valid or _too_short(checked):
+            return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
+        text = checked
+    top_doc = hits[0].chunk.doc_id if hits else None       # документ, который поиск поставил первым
     text, hits, cited = _renumber(text, hits, valid)
     strongest = max((h.score for h in hits if not h.neighbor), default=0.0)
-    if (retrieval.scored_by == "reranker"
+    if (retrieval.scored_by == "reranker" and top_doc not in {hits[n - 1].chunk.doc_id for n in cited}
             and max(_support(hits[n - 1], hits) for n in cited) < settings.cited_threshold <= strongest):
-        # модель опёрлась только на слабые фрагменты, а сильный не использовала — значит, сильный не о том,
-        # а слабые лишь похожи словами («поверка осциллографа» на вопрос «как отправить СИ на поверку»).
-        # Если слабое всё найденное (разговорный вопрос), решает проверка «зоны сомнения» (verify)
+        # модель ушла от документа, найденного первым, и опёрлась только на слабые фрагменты другого —
+        # значит, ответ лишь похож словами («поверка осциллографа» на вопрос «как отправить СИ на поверку»).
+        # Если слабое всё найденное (длинный или разговорный вопрос), решает проверка «зоны сомнения» (verify)
         stats["weak_citations"] = True
         return Answer("model_refused", "Найденные фрагменты относятся к другому вопросу — ответа в документах нет.",
                       hits=hits, stats=stats)

@@ -219,7 +219,10 @@ def _labels(sql: str, columns: list) -> list[str]:
 
 
 GENERIC_WORDS = ("сколько где какой какие есть остаток осталось склад лежит хранится находится номер запись "
-                 "отвечает сейчас числится имеется когда следующий")
+                 "отвечает сейчас числится имеется когда следующий прибор приборы просрочен просроченные")
+# как сотрудники называют данные учёта — так, как они названы в описании базы для модели
+DB_TERMS = [(re.compile(r"\bприбор(?:ы|ов|ам|ами|ах|а|у|ом|е)?\b", re.I), "средства измерений"),
+            (re.compile(r"\bпросроч\w*(?:\s+по\s+поверке)?", re.I), "с истёкшим сроком поверки")]
 
 
 def _near_terms(question: str) -> list[str]:
@@ -537,8 +540,12 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
     if PRICE_RE.search(question):
         return DbAnswer("no_data", "В учётной базе нет цен и оплаты — только оборудование, средства измерений, "
                                    "заявки на ремонт и склад.", stats=stats)
+    sql_question = question
+    for rx, term in DB_TERMS:
+        sql_question = rx.sub(term, sql_question)
     try:
-        raw, s1 = llm.chat([{"role": "user", "content": SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION, question=question)}],
+        raw, s1 = llm.chat([{"role": "user", "content": SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION,
+                                                                          question=sql_question)}],
                            max_tokens=300)
     except llm.ModelError as e:
         return DbAnswer("error", f"Языковая модель недоступна: {e}")
@@ -557,7 +564,7 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
             error = str(e)
             if attempt == 1:
                 return DbAnswer("error", f"Не удалось выполнить запрос к базе: {error}", sql=sql, stats=stats)
-            fix = SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION, question=question) + f"\n{sql}\n\nОшибка: {error}\nИсправленный SQL:"
+            fix = SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION, question=sql_question) + f"\n{sql}\n\nОшибка: {error}\nИсправленный SQL:"
             raw, _ = llm.chat([{"role": "user", "content": fix}], max_tokens=300)
             sql = _fuzzy_text(_fix_dates(_repair_aliases(_extract_sql(raw))))
 

@@ -91,6 +91,69 @@ HELP_RE = re.compile(r"что (?:ты )?(?:умеешь|можешь)|кто т�
 ABOUT_RE = re.compile(r"откуда (?:ты )?(?:бер[её]шь|зна[её]шь|ответ|информаци|данные)|на ч[её]м (?:ты )?основ|"
                       r"как ты (?:работаешь|находишь|отвечаешь)|можно (?:ли )?тебе доверять|ты (?:не )?выдумываешь",
                       re.I)
+# Вопросы о самом агенте, которые задают на показе: модель, интернет, ошибки, куда уходят вопросы,
+# служебные настройки, просьбы изменить базу, совет «от себя», стихи и анекдоты
+MODEL_Q_RE = re.compile(r"chat\s*gpt|\bgpt\b|чат\s*гпт|\bгпт\b|gigachat|гигачат|кто тебя (?:сделал|создал|разработал)|"
+                        r"(?:как\w*|на как\w*)\s+(?:ты\s+)?(?:модел\w*|нейросет\w*|ии\b|искусственн\w+)|"
+                        r"\bты\s+(?:[—-]\s*)?(?:нейросеть|ии|бот|робот|человек)\b", re.I)
+OFFLINE_Q_RE = re.compile(r"\b(?:ты|агент\w*|систем\w*|помощник\w*|работаешь|работает)\b[^?]{0,40}\bинтернет|"
+                          r"нуж\w+ ли (?:тебе |для работы )?интернет|\bоблак|"
+                          r"(?:переда[её]шь|отправляешь|отсылаешь)\b[^?]{0,30}(?:наружу|интернет|сервер|облак)", re.I)
+ERRORS_Q_RE = re.compile(r"\b(?:ты|вы)\s+(?:можешь|может|можете)\s+(?:ли\s+)?ошиб|(?:можешь|бывает)\s+ли\s+(?:ты\s+)?ошиб|"
+                         r"\bты\s+ошибаешься|насколько\s+(?:ты\s+)?точ\w+", re.I)
+PRIVACY_Q_RE = re.compile(r"куда\s+уход\w*|кто\s+(?:видит|читает|смотрит)\s+(?:мои\s+)?(?:вопрос|ответ|запрос|диалог)|"
+                          r"(?:сохраня|храни|храня|записыва)\w*\s+(?:ли\s+)?(?:ты\s+)?(?:мои\s+)?(?:вопрос|запрос|диалог)|"
+                          r"конфиденциальн|\bмои\s+(?:вопросы|запросы|данные)\b", re.I)
+PROMPT_Q_RE = re.compile(r"системн\w*\s+(?:промпт|подсказк|инструкц)|(?:свой|свои|твой|твои)\s+(?:промпт|инструкци\w*|"
+                         r"настройк\w*)|\bprompt\b|\bпромпт", re.I)
+WRITE_Q_RE = re.compile(r"^\s*(?:удали|удалить|измени|изменить|добавь|добавить|исправь|исправить|внеси|внести|обнови|"
+                        r"обновить|создай|создать|оформи|оформить)\b[^?]*(?:запис|заявк|баз|уч[её]т|склад|остат|прибор|"
+                        r"оборудован|парти|позици)|\b(?:delete|update|insert|drop|truncate|alter)\b", re.I)
+OPINION_Q_RE = re.compile(r"лучше\s+(?:купить|выбрать|взять|заказать)|для\s+дома|посоветуй|порекомендуй|"
+                          r"тво[её]\s+мнение|как\s+(?:ты\s+)?думаешь|стоит\s+ли\s+(?:покупать|брать|заказывать)", re.I)
+CREATIVE_Q_RE = re.compile(r"^\s*(?:напиши|сочини|придумай|расскажи)\s+(?:мне\s+)?(?:стих\w*|анекдот\w*|шутк\w*|"
+                           r"сказк\w*|песн\w*|историю|рассказ)", re.I)
+MODEL_TEXT = ("Я работаю на открытой отечественной языковой модели GigaChat 3.1 Lightning, установленной прямо на "
+              "компьютере предприятия. ChatGPT и другие внешние сервисы не используются. Поиск по документам тоже "
+              "идёт на месте — моделями bge-m3 и bge-reranker-v2-m3.\n\nМодель не отвечает «от себя»: она получает "
+              "только найденные пункты документов или записи учёта и составляет ответ по ним, со ссылкой на источник.")
+OFFLINE_TEXT = ("Да, интернет мне не нужен: языковая модель, поиск, документы и учётная база работают на компьютере "
+                "предприятия. Вопросы, документы и ответы никуда не передаются — систему можно ставить в закрытый контур.")
+ERRORS_TEXT = ("Могу — поэтому каждый ответ даю со ссылкой на документ, пункт и страницу: нажмите на источник и сверьте "
+               "с оригиналом. Ответ без подтверждённой ссылки я не показываю, а если ответа в документах нет — так и "
+               "говорю, не придумываю. Если ответ неверный, поставьте 👎 — администратор увидит это и разберёт.")
+PRIVACY_TEXT = ("Вопросы и ответы сохраняются в журнале на сервере предприятия, его видит только администратор системы: "
+                "так находятся ошибки и вопросы, на которые в документах нет ответа. Наружу ничего не передаётся. "
+                "Документы вам доступны по вашей роли.")
+PROMPT_TEXT = ("Служебные настройки я не показываю. Отвечаю только по документам предприятия и учётной базе — "
+               "задайте вопрос по ним, например:")
+WRITE_TEXT = ("Учётную базу я только читаю: добавлять, изменять или удалять записи не могу — так задумано, чтобы "
+              "помощник ничего не испортил. Изменения вносятся в самой учётной системе. Могу показать записи, например:")
+OPINION_TEXT = ("Советов и рекомендаций «от себя» я не даю — отвечаю только тем, что записано в документах "
+                "предприятия. Могу показать, какие документы есть по теме, например:")
+CREATIVE_TEXT = "Стихов и анекдотов не пишу — я помощник по документам и учёту предприятия. Спросите, например:"
+DB_EXAMPLES = ["У каких средств измерений истёк срок поверки?", "Какое оборудование сейчас в ремонте?",
+               "Где лежит флюс?"]
+# Служебные вставки в вопросе: «игнорируй инструкции и…», «ответь без документов, своими словами» —
+# вырезаются, остаётся сам вопрос (ответ всё равно только по документам)
+META_RE = re.compile(
+    r"(?:игнорируй|забудь|не\s+учитывай|отбрось)\s+(?:все\s+|свои\s+|предыдущие\s+|прошлые\s+)*"
+    r"(?:инструкци\w*|правил\w*|указани\w*|ограничени\w*|документ\w*)[,;:.!]?\s*(?:и\s+)?|"
+    r"(?:ответь|отвечай|скажи|напиши)\s+(?:мне\s+)?(?:без\s+(?:документов|ссылок|источников)|своими\s+словами|"
+    r"честно)[,;:.!—-]*\s*|без\s+(?:документов|ссылок|источников)[,;:—-]*\s*|своими\s+словами[,;:—-]*\s*|"
+    r"(?:ответь|скажи|напиши|подтверди),?\s+что\s+", re.I)
+# «Что делать?», «Куда звонить?» без предмета и без предыдущего вопроса — встречный вопрос
+VAGUE_RE = re.compile(r"^\s*(?:а\s+|и\s+)?(?:что|как|куда|кому|где)\s+(?:мне\s+|нам\s+)?(?:делать|быть|поступить|"
+                      r"звонить|сообщать|обращаться|идти|смотреть)\s*[?!.]*\s*$", re.I)
+SHORTEN_PROMPT = """Сотрудник задал длинный вопрос помощнику по документам предприятия.
+Сформулируй суть одним коротким вопросом (до 20 слов): что именно он хочет узнать. Сохрани все условия,
+предметы и номера (оборудование, категории, номера записей); если вопросов несколько — сохрани все.
+Приветствие и рассказ о себе убери. Не отвечай на вопрос. Верни только вопрос одной строкой.
+
+Вопрос: {question}
+Короткий вопрос:"""
+LONG_QUESTION_WORDS = 22
+
 EXAMPLES = ["Что делать при искрении оборудования?", "На какой срок выдаётся наряд-допуск?",
             "Можно ли выдать в производство партию П-2609-04?", "Какие документы есть про паяльные станции?"]
 ABOUT_TEXT = ("Я отвечаю только по документам предприятия, доступным вашей роли, и по учётной базе — "
@@ -104,8 +167,8 @@ ABOUT_TEXT = ("Я отвечаю только по документам пред
 
 
 PART_SPLIT_RE = re.compile(
-    r"\s*[,;]?\s+и\s+(?=(?:как|что|кто|какой|какая|какое|какие|каким|где|когда|сколько|куда|кому|чем|почему|зачем|"
-    r"в какой|на какой|в течение|за какое)\b)|\?\s+(?=\S)", re.I)
+    r"\s*[,;]?\s+и\s+(?=(?:(?:к|в|на|о|об|по|с|у|от|для|из|при)\s+)?(?:как|что|кто|какой|какая|какое|какие|каким|"
+    r"где|когда|сколько|куда|кому|кого|чем|почему|зачем|в течение|за какое)\b)|\?\s+(?=\S)", re.I)
 
 
 # Как вопрос называет документ → как это записано в названии документа
@@ -132,7 +195,13 @@ def named_docs(question: str, cards: dict[str, dict]) -> set[str]:
 
 def merge(base, extra, limit: int) -> None:
     """Добавляет к найденному до `limit` новых уверенных фрагментов из другого поиска."""
-    seen = {h.chunk.id for h in base.hits}
+    seen = {h.chunk.id: h for h in base.hits}
+    for h in extra.hits:
+        # тот же фрагмент по части вопроса оценён выше («порядок действий при искрении» — 0,18 против 0,01
+        # по всему длинному вопросу): берём лучшую оценку, иначе ответ по нему сочтётся опорой на слабое
+        old = seen.get(h.chunk.id)
+        if old is not None and not h.neighbor and h.score > old.score:
+            old.score, old.neighbor = h.score, False
     new = [h for h in extra.hits if not h.neighbor and h.chunk.id not in seen
            and h.score >= settings.rerank_threshold][:limit]
     base.hits += new
@@ -156,7 +225,8 @@ def _load_glossary() -> dict[str, list[str]]:
 
 
 GLOSSARY = _load_glossary()
-TOPIC_NOISE_RE = re.compile(r"\b(?:есть|имеются|у вас|у нас|в базе|про|по теме|на тему|о|об|по|касаются|касающиеся|"
+TOPIC_NOISE_RE = re.compile(r"\b(?:в базе знаний|базе знаний|база знаний|в системе|у тебя|вообще|всего|доступн\w*|"
+                            r"ты знаешь|знаешь|есть|имеются|у вас|у нас|в базе|про|по теме|на тему|о|об|по|касаются|касающиеся|"
                             r"описан\w*|говорится|упоминается|рассказывается|написано)\b", re.I)
 
 
@@ -309,6 +379,18 @@ class Agent:
         options = [re.sub(r"^[\s\d.)•*-]+", "", line).strip() for line in out.splitlines()]
         return [o for o in options if len(o) > 8][:3]
 
+    def shorten(self, question: str) -> str:
+        """Длинный вопрос с приветствием и рассказом о себе — к сути: иначе поиск тонет в лишних словах."""
+        try:
+            out, _ = llm.chat([{"role": "user", "content": SHORTEN_PROMPT.format(question=question)}], max_tokens=80)
+        except llm.ModelError:
+            return question
+        out = out.strip().splitlines()[0].strip(" «»\"") if out.strip() else ""
+        records = {r.upper() for r in RECORD_RE.findall(question)}
+        if not 8 <= len(out) <= 250 or records - {r.upper() for r in RECORD_RE.findall(out)}:
+            return question          # сжатие потеряло номер записи — ищем по исходному вопросу
+        return out
+
     @staticmethod
     def is_vague(question: str, retrieval) -> bool:
         """Короткий вопрос без предмета, а найденное разбросано по разным документам."""
@@ -321,6 +403,13 @@ class Agent:
     def small_talk(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
         """Приветствие, «что ты умеешь», «откуда ответы», «спасибо», пустой ввод — справка с примерами."""
         docs = sum(1 for c in self.cards.values() if c["access"] in allowed)
+        faq = [(PROMPT_Q_RE, PROMPT_TEXT, EXAMPLES), (WRITE_Q_RE, WRITE_TEXT, DB_EXAMPLES),
+               (CREATIVE_Q_RE, CREATIVE_TEXT, EXAMPLES), (MODEL_Q_RE, MODEL_TEXT, None),
+               (OFFLINE_Q_RE, OFFLINE_TEXT, None), (ERRORS_Q_RE, ERRORS_TEXT, None),
+               (PRIVACY_Q_RE, PRIVACY_TEXT, None), (OPINION_Q_RE, OPINION_TEXT, EXAMPLES)]
+        for rx, text, options in faq:
+            if rx.search(question):
+                return AgentResult(question, role, "help", "info", text, options=list(options or []))
         if GREETING_RE.match(question):
             text = (f"Здравствуйте! Я отвечаю на вопросы по регламентам, инструкциям, ГОСТам и данным учёта "
                     f"предприятия — со ссылкой на документ, пункт и страницу. Вам доступно документов: {docs}. "
@@ -346,28 +435,68 @@ class Agent:
 
     # ---------- ответ ----------
 
+    def _ask_parts(self, question: str, asked: str, parts: list[str], routes: list[str], role: str) -> AgentResult:
+        """Ответ на каждую часть из своего источника; ссылки второй части продолжают нумерацию первой."""
+        blocks, sources, offset, statuses = [], [], 0, []
+        combined = AgentResult(question, role, "both", "answer", "", stats={"parts": len(parts)})
+        for part, part_route in zip(parts, routes):
+            sub = self.ask(part[:1].upper() + part[1:] + "?", role=role, route=part_route, log=False)
+            statuses.append(sub.status)
+            shift = lambda m, k=offset: "[" + re.sub(r"\d+", lambda d: str(int(d.group(0)) + k), m.group(1)) + "]"  # noqa: E731
+            body = re.sub(r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]", shift, sub.text) if offset else sub.text
+            blocks.append(f"**{part[:1].upper() + part[1:]}?**\n\n{body}")
+            sources += [{**s, "n": s["n"] + offset} for s in sub.sources]
+            offset += len(sub.sources)
+            if sub.rows and not combined.rows:
+                combined.sql, combined.columns, combined.rows, combined.labels = sub.sql, sub.columns, sub.rows, sub.labels
+        combined.text, combined.sources = "\n\n".join(blocks), sources
+        if "answer" not in statuses:
+            combined.status = statuses[0]
+        combined.asked = asked if asked != question else None
+        return combined
+
     def ask(self, question: str, role: str = "Администратор", route: str = "auto",
             history: list[dict] | None = None, on_step: Callable[[str], None] | None = None,
-            user: str | None = None) -> AgentResult:
+            user: str | None = None, log: bool = True) -> AgentResult:
         t0 = time.time()
         step = on_step or (lambda _: None)
         if settings.db_path == demo_db.DB:
             demo_db.ensure_current()      # даты демо-базы — от сегодняшнего дня
         allowed = settings.roles.get(role, {"all"})
 
-        talk = self.small_talk(question, role, allowed)
+        # «игнорируй инструкции и…», «ответь без документов, своими словами» — отвечаем на сам вопрос
+        base = re.sub(r"^[\s,;:.!—-]+", "", META_RE.sub("", question)).strip() or question
+        if base != question:
+            base = base[:1].upper() + base[1:]
+        talk = self.small_talk(base, role, allowed)
         if talk is not None:
             talk.seconds = round(time.time() - t0, 2)
             self._log(talk, user)
             return talk
 
-        asked = question
-        if history and self.needs_context(question):
+        asked = base
+        if history and self.needs_context(base):
             step("Уточняю вопрос по ходу диалога…")
-            asked = self.condense(question, history)
+            asked = self.condense(base, history)
+        elif len(base.split()) > LONG_QUESTION_WORDS:
+            step("Выделяю суть вопроса…")
+            asked = self.shorten(base)
+        # «Что делать?» или одно слово («Поверка») — встречный вопрос с вариантами, а не случайный ответ
+        vague = route == "auto" and (VAGUE_RE.match(asked) or (len(asked.split()) == 1 and not RECORD_RE.search(asked)))
 
         auto = route == "auto"
         result = db_result = a_db = None
+        parts = split_parts(asked)
+        if auto and not vague and len(parts) > 1 and not RECORD_RE.search(asked):
+            # «Сколько действует наряд-допуск и где лежит флюс?» — одна часть к документам, другая к учёту
+            routes = [self.route(p) for p in parts]
+            if "database" in routes and set(routes) != {"database"}:
+                step("Вопрос из двух частей — отвечаю на каждую…")
+                result = self._ask_parts(question, asked, parts, routes, role)
+                result.seconds = round(time.time() - t0, 2)
+                if log:
+                    self._log(result, user)
+                return result
         if route in ("auto", "documents") and DOCS_Q_RE.search(asked):
             step("Ищу подходящие документы в каталоге…")
             result = self.answer_catalog(asked, role, allowed)
@@ -379,7 +508,7 @@ class Agent:
                 route = "documents"
         if result is None and auto:
             step("Выбираю, где искать ответ…")
-            route = self.route(asked)
+            route = "documents" if vague else self.route(asked)
 
         if route in ("database", "both"):
             step("Запрос к учётной базе…")
@@ -411,26 +540,25 @@ class Agent:
                 # входной контроль», а «ЭРИ, карантин» — похожа; но длинное описание записи может перебить
                 # сам вопрос («кому звонить ночью»), поэтому найденное по обоим запросам объединяется
                 merge(retrieval, retrieve(self.index, f"{asked} {summary}", allowed), limit=3)
-            if asked != question and history:
+            if asked != base and history:
                 # уточнение в диалоге: ищем и вместе с темой предыдущего вопроса («отказ категории Б» +
                 # «ночная смена» → раздел о ночной смене), добавляем до двух новых фрагментов
                 extra = retrieve(self.index, f"{asked} {history[-1]['question']}", allowed)
                 seen = {h.chunk.id for h in retrieval.hits}
                 retrieval.hits += [h for h in extra.hits if not h.neighbor and h.chunk.id not in seen][:2]
-            parts = split_parts(asked)
             if len(parts) > 1:
                 # составной вопрос («чем отличаются категории и как быстро реагируют») — ищем по каждой части,
                 # иначе поиск находит пункты только про одну из них
                 for part in parts:
                     merge(retrieval, retrieve(self.index, part, allowed), limit=2)
             prev_docs = set((history or [{}])[-1].get("docs") or [])
-            if (asked != question and not retrieval.confident and retrieval.hits
+            if (asked != base and history and not retrieval.confident and retrieval.hits
                     and retrieval.hits[0].chunk.doc_id in prev_docs
                     and retrieval.best_score >= settings.rerank_threshold / 3):
                 # уточнение в диалоге, и лучший фрагмент — из документа предыдущего ответа: отвечаем,
                 # но как в «зоне сомнения» — с проверкой, что ответ о том же предмете
                 retrieval.confident = True
-            if auto and route == "documents" and self.is_vague(asked, retrieval):
+            if auto and route == "documents" and (vague or self.is_vague(asked, retrieval)):
                 step("Вопрос слишком общий — подбираю уточнения…")
                 options = self.clarify(asked, retrieval)
                 if options:
@@ -471,7 +599,8 @@ class Agent:
         result.question, result.role = question, role
         result.asked = asked if asked != question else None
         result.seconds = round(time.time() - t0, 2)
-        self._log(result, user)
+        if log:
+            self._log(result, user)
         return result
 
     @staticmethod
