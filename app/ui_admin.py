@@ -1,5 +1,6 @@
 """Страница администрирования: журнал, оценки, документы, качество, состояние системы."""
 import json
+import re
 
 import pandas as pd
 import streamlit as st
@@ -8,6 +9,8 @@ from app.ui_common import (ACCESS_LABELS, ROOT, ROUTE_LABELS, STATUS_LABELS, ctx
                            inject_css)
 from kbagent import auth
 from kbagent.config import settings
+from kbagent.gaps import find_gaps
+from kbagent.database import display
 from kbagent.ingest import ocr_available
 from kbagent.uploads import add_upload, approve_upload, documents, list_uploads, remove_upload
 
@@ -34,6 +37,7 @@ def journal() -> None:
     users = c1.multiselect("Пользователи", sorted(df["user"].dropna().unique()), placeholder="Все")
     statuses = c2.multiselect("Итог", list(STATUS_LABELS.values()), placeholder="Любой")
     text = c3.text_input("Поиск по вопросу", placeholder="Например: поверка")
+    df["time"] = df["time"].map(lambda t: display(t)[:16] if isinstance(t, str) else t)     # 05.10.2026 14:20
     df["status"] = df["status"].map(lambda s: STATUS_LABELS.get(s, s))
     df["route"] = df["route"].map(lambda s: ROUTE_LABELS.get(s, s))
     df["cited"] = df["cited"].map(lambda c: "; ".join(c) if isinstance(c, list) else c)
@@ -50,6 +54,35 @@ def journal() -> None:
     st.dataframe(df, hide_index=True, use_container_width=True, height=480,
                  column_config={"Ответ": st.column_config.TextColumn(width="large")})
     st.download_button("Выгрузить в CSV", _csv(df), file_name="zhurnal_zaprosov.csv", icon=":material/download:")
+
+
+def _records() -> list[dict]:
+    log = settings.log_dir / "audit.jsonl"
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()[-20000:] if line.strip()]
+
+
+def gaps() -> None:
+    topics, total = find_gaps(_records())
+    st.caption("Вопросы сотрудников, на которые в документах и учёте не нашлось ответа. Похожие формулировки "
+               "собраны в одну тему — это список того, что стоит дописать в регламенты или загрузить в базу знаний.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Вопросов сотрудников", total["questions"])
+    share = f" ({100 * total['unanswered'] / total['questions']:.0f} %)" if total["questions"] else ""
+    c2.metric("Без ответа", f"{total['unanswered']}{share}")
+    c3.metric("Тем без ответа", total["topics"])
+    if not topics:
+        st.info("Пока все вопросы сотрудников получили ответ.")
+        return
+    df = pd.DataFrame([{"Тема (как спрашивали чаще всего)": t["question"], "Раз": t["count"],
+                        "Сотрудников": t["users"], "Роли": ", ".join(t["roles"]), "Последний раз": display(t["last"])[:16],
+                        "Другие формулировки": "; ".join(t["other"]) or "—"} for t in topics])
+    st.dataframe(df, hide_index=True, use_container_width=True,
+                 column_config={"Тема (как спрашивали чаще всего)": st.column_config.TextColumn(width="large"),
+                                "Другие формулировки": st.column_config.TextColumn(width="large")})
+    st.download_button("Выгрузить в CSV", _csv(df), file_name="probely_v_dokumentacii.csv",
+                       icon=":material/download:", key="gaps-csv")
 
 
 def feedback() -> None:
@@ -140,20 +173,46 @@ def docs() -> None:
     st.caption("Отменённые редакции хранятся для истории, но в поиске не участвуют.")
 
 
+def _report(path) -> dict | None:
+    """Сводка отчёта eval/results/*.md: верно из всего, метрики, медиана времени, текст без заголовка."""
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    total = re.search(r"вопросов: (\d+)", text)
+    return {"ok": len(re.findall(r"^\|[^|\n]+\|[^|\n]+\|[^|\n]+\| верно \|", text, re.M)),
+            "total": int(total.group(1)) if total else 0,
+            "metrics": dict(re.findall(r"^\| ([^|\n]+?) \| (\d+ из \d+|[\d.]+ с) \|$", text, re.M)),
+            "body": text.split("\n", 1)[1] if text.startswith("# ") else text,
+            "date": (re.search(r"\((\d{4}-\d{2}-\d{2})", text) or [None, ""])[1]}
+
+
 def quality() -> None:
     results = ROOT / "eval" / "results"
-    latest = results / "latest.md"
-    if latest.exists():
-        st.markdown(latest.read_text(encoding="utf-8"))
-    else:
-        st.info("Результатов проверки качества пока нет.")
-    for title, name in [("Разграничение доступа: одни вопросы под ролями инженера и метролога", "roles.md"),
-                        ("Тот же эталон на ноутбуке без видеокарты", "laptop.md"),
-                        ("Тот же эталон на ноутбуке с небольшой видеокартой", "smallgpu.md")]:
-        path = results / name
-        if path.exists():
-            with st.expander(title):
-                st.markdown(path.read_text(encoding="utf-8"))
+    main, jury, roles = (_report(results / f"{n}.md") for n in ("latest", "jury", "roles"))
+    laptop, small = _report(results / "laptop.md"), _report(results / "smallgpu.md")
+    if main is None:
+        st.info("Результатов проверки качества пока нет: python eval/run_eval.py")
+        return
+    m = main["metrics"]
+    seconds = lambda r: (r["metrics"].get("Время ответа, медиана", "—").replace(".", ",") if r else "—")  # noqa: E731
+    st.caption(f"Эталонный набор: {main['total']} вопросов с проверенными ответами. Ответ засчитывается, только если "
+               "верные факты есть в самом тексте ответа и ссылка указывает на верный документ и пункт.")
+    c = st.columns(4)
+    c[0].metric("Верные ответы со ссылкой", m.get("Правильных ответов (факты и источник верны)", "—"))
+    c[1].metric("Честные отказы, когда ответа нет", m.get("Верных отказов на вопросы без ответа", "—"))
+    c[2].metric("Ответы по учётной базе", m.get("Ответов по учётной базе", "—"))
+    c[3].metric("Неверные ответы", m.get("Неверных ответов, выданных как ответ", "—"))
+    c = st.columns(4)
+    c[0].metric("Вопросы «с ходу», как от жюри", f"{jury['ok']} из {jury['total']}" if jury else "—")
+    c[1].metric("Разграничение доступа по ролям", f"{roles['ok']} из {roles['total']}" if roles else "—")
+    c[2].metric("Ответ на видеокарте, медиана", seconds(main))
+    c[3].metric("Ноутбук: без видеокарты / 4 ГБ", f"{seconds(laptop)} / {seconds(small)}")
+    for title, rep in [(f"Эталон — все {main['total']} вопросов", main), ("Вопросы «с ходу», как от жюри", jury),
+                       ("Разграничение доступа по ролям", roles), ("Эталон на ноутбуке без видеокарты", laptop),
+                       ("Эталон на ноутбуке с небольшой видеокартой", small)]:
+        if rep:
+            with st.expander(f"{title} — {rep['ok']} из {rep['total']}, прогон {display(rep['date'])}"):
+                st.markdown(rep["body"])
 
 
 def system() -> None:
@@ -184,14 +243,16 @@ def admin_page() -> None:
         st.error("Раздел доступен только администратору.")
         return
     st.markdown("### Администрирование")
-    tabs = st.tabs(["Журнал запросов", "Оценки", "Документы", "Качество", "Система"])
+    tabs = st.tabs(["Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Качество", "Система"])
     with tabs[0]:
         journal()
     with tabs[1]:
-        feedback()
+        gaps()
     with tabs[2]:
-        docs()
+        feedback()
     with tabs[3]:
-        quality()
+        docs()
     with tabs[4]:
+        quality()
+    with tabs[5]:
         system()

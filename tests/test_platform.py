@@ -120,3 +120,17 @@ def test_uploaded_document_title_is_taken_from_its_text(tmp_path):
     path = tmp_path / "RI-DP-05.docx"
     doc.save(path)
     assert guess_title(path) == "РИ ДП-05-2026 «Обслуживание установки селективной пайки»"
+
+
+def test_unanswered_questions_are_grouped_into_topics():
+    from kbagent.gaps import find_gaps
+    rec = lambda q, status, user="petrov", t="2026-10-05 10:00:00": {  # noqa: E731
+        "time": t, "user": user, "role": "Инженер производства", "question": q, "status": status, "route": "documents"}
+    records = [rec("Сколько стоит поверка осциллографа?", "no_data"),
+               rec("Какая стоимость поверки осциллографа?", "no_data", user="ivanov", t="2026-10-05 11:00:00"),
+               rec("Где взять пропуск на склад?", "model_refused"),
+               rec("Что делать при искрении?", "answer"),
+               rec("Сколько стоит поверка осциллографа?", "no_data", user="eval")]       # прогон эталона — не в счёт
+    topics, total = find_gaps(records)
+    assert total == {"questions": 4, "unanswered": 3, "topics": 2}
+    assert topics[0]["count"] == 2 and topics[0]["users"] == 2 and topics[0]["last"] == "2026-10-05 11:00:00"
