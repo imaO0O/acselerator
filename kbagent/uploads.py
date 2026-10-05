@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from .actions import log_action
 from .config import settings
 from .ingest import access_of, load_catalog
 from .store import Index
@@ -124,6 +125,9 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
                                 progress=progress, stats=stats)
     if replaces:
         _sync_access(index, replaces)
+    log_action("upload", user, title, f"фрагментов: {len(chunks)}; доступ: {access}"
+               + (f"; заменяет: {replaces}" if replaces else "") + (f"; распознано страниц: {stats['ocr_pages']}"
+                                                                     if stats.get("ocr_pages") else ""))
     return {"id": doc_id, "title": title, "chunks": len(chunks), "replaced_same": replaced_same, **stats}
 
 
@@ -135,14 +139,16 @@ def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:
                      approved_at=time.strftime("%Y-%m-%d %H:%M"))
     _write_catalog(docs)
     index.update_meta(doc_id, settings.index_dir, doc_kind=KIND_APPROVED)
+    log_action("approve", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id))
 
 
 def list_uploads() -> list[dict]:
     return _read_catalog()
 
 
-def remove_upload(index: Index, doc_id: str) -> None:
+def remove_upload(index: Index, doc_id: str, user: str | None = None) -> None:
     docs = _read_catalog()
+    log_action("remove", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id))
     replaced = next((d.get("replaces") for d in docs if d["id"] == doc_id), None)
     _write_catalog([d for d in docs if d["id"] != doc_id])
     index.remove_document(doc_id, settings.index_dir)

@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from kbagent import llm  # noqa: E402
+from kbagent.actions import log_action  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
@@ -50,6 +51,7 @@ def client(x_api_key: str | None = Header(None, description="Ключ досту
             if k["role"] not in settings.roles:
                 raise HTTPException(500, "У ключа указана неизвестная роль")
             return k
+    log_action("api_denied", None, "", "неверный ключ")
     raise HTTPException(401, "Неверный ключ доступа")
 
 

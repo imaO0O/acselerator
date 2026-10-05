@@ -1,6 +1,7 @@
 """Страница администрирования: журнал, оценки, документы, качество, состояние системы."""
 import json
 import re
+import time
 
 import pandas as pd
 import streamlit as st
@@ -9,6 +10,7 @@ from app.ui_common import (ACCESS_LABELS, ROOT, ROUTE_LABELS, STATUS_LABELS, ctx
                            inject_css)
 from kbagent import auth
 from kbagent.config import settings
+from kbagent.actions import ACTIONS, load_actions
 from kbagent.gaps import find_gaps
 from kbagent.database import display
 from kbagent.ingest import ocr_available
@@ -51,7 +53,7 @@ def journal() -> None:
     df.columns = ["Время", "Пользователь", "Роль", "Вопрос", "Понят как", "Источник", "Итог", "Секунд",
                   "Ссылки", "Ответ"]
     st.caption(f"Записей: {len(df)}. Журнал хранится в logs/audit.jsonl на сервере.")
-    st.dataframe(df, hide_index=True, use_container_width=True, height=480,
+    st.dataframe(df, hide_index=True, use_container_width=True, height=min(480, 35 * (len(df) + 1) + 3),
                  column_config={"Ответ": st.column_config.TextColumn(width="large")})
     st.download_button("Выгрузить в CSV", _csv(df), file_name="zhurnal_zaprosov.csv", icon=":material/download:")
 
@@ -83,6 +85,32 @@ def gaps() -> None:
                                 "Другие формулировки": st.column_config.TextColumn(width="large")})
     st.download_button("Выгрузить в CSV", _csv(df), file_name="probely_v_dokumentacii.csv",
                        icon=":material/download:", key="gaps-csv")
+
+
+def security() -> None:
+    records = load_actions()
+    st.caption("Кто, что и когда сделал: входы и неудачные попытки входа, загрузка, утверждение и удаление "
+               "документов, выдача ключей API. Журнал только дописывается; хранится в logs/actions.jsonl на сервере.")
+    day_ago = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 86400))
+    recent = [r for r in records if r["time"] >= day_ago]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Входов за сутки", sum(r["action"] == "login" for r in recent))
+    c2.metric("Неудачных попыток входа за сутки", sum(r["action"] == "login_failed" for r in recent))
+    c3.metric("Изменений базы знаний за сутки", sum(r["action"] in ("upload", "approve", "remove") for r in recent))
+    if not records:
+        st.info("Действий пока нет.")
+        return
+    kinds = st.multiselect("События", list(ACTIONS.values()), placeholder="Все")
+    df = pd.DataFrame(records[::-1]).reindex(columns=["time", "action", "user", "target", "details"])
+    df["time"] = df["time"].map(lambda t: display(t)[:16])
+    df["action"] = df["action"].map(lambda a: ACTIONS.get(a, a))
+    if kinds:
+        df = df[df["action"].isin(kinds)]
+    df = df.fillna("—").replace("", "—")
+    df.columns = ["Время", "Событие", "Пользователь", "Объект", "Подробности"]
+    st.dataframe(df, hide_index=True, use_container_width=True, height=min(420, 35 * (len(df) + 1) + 3))
+    st.download_button("Выгрузить в CSV", _csv(df), file_name="zhurnal_deystviy.csv", icon=":material/download:",
+                       key="actions-csv")
 
 
 def feedback() -> None:
@@ -159,7 +187,7 @@ def docs() -> None:
                 approve_upload(agent.index, d["id"], user=ctx()["login"])
                 st.rerun()
             if c3.button(":material/delete:", key=f"rm-{d['id']}", help="Удалить из базы знаний"):
-                remove_upload(agent.index, d["id"])
+                remove_upload(agent.index, d["id"], user=ctx()["login"])
                 st.rerun()
 
     st.markdown("**Все документы базы знаний**")
@@ -243,7 +271,8 @@ def admin_page() -> None:
         st.error("Раздел доступен только администратору.")
         return
     st.markdown("### Администрирование")
-    tabs = st.tabs(["Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Качество", "Система"])
+    tabs = st.tabs(["Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Качество",
+                    "Безопасность", "Система"])
     with tabs[0]:
         journal()
     with tabs[1]:
@@ -255,4 +284,6 @@ def admin_page() -> None:
     with tabs[4]:
         quality()
     with tabs[5]:
+        security()
+    with tabs[6]:
         system()

@@ -60,7 +60,7 @@ def test_eval_helpers():
     assert ev.has_facts("Срок — 5 рабочих дней", ["5 рабочих дней"]) and ev.has_none("2211", ["2200"])
 
 
-def test_api_requires_key(tmp_path, monkeypatch):
+def test_api_requires_key(tmp_path, monkeypatch, tmp_settings):
     from fastapi.testclient import TestClient
 
     from api import server
@@ -134,3 +134,12 @@ def test_unanswered_questions_are_grouped_into_topics():
     topics, total = find_gaps(records)
     assert total == {"questions": 4, "unanswered": 3, "topics": 2}
     assert topics[0]["count"] == 2 and topics[0]["users"] == 2 and topics[0]["last"] == "2026-10-05 11:00:00"
+
+
+def test_actions_journal_records_who_did_what(tmp_settings):
+    from kbagent.actions import load_actions, log_action
+    log_action("login_failed", "ivanov")
+    log_action("upload", "admin", "РИ ДП-05-2026", "фрагментов: 7")
+    records = load_actions()
+    assert [r["action"] for r in records] == ["login_failed", "upload"]
+    assert records[1]["user"] == "admin" and records[1]["target"] == "РИ ДП-05-2026"

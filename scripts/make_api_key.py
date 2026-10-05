@@ -5,6 +5,7 @@
 Ключ показывается один раз — передайте его владельцу интеграции. В data/api_keys.yaml
 сохраняется только его хэш. Отозвать ключ — удалить строку из этого файла.
 """
+import getpass
 import secrets
 import sys
 import time
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from api.server import KEYS_PATH, key_hash  # noqa: E402
+from kbagent.actions import log_action  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
 
@@ -30,6 +32,7 @@ def main():
     KEYS_PATH.write_text("# Ключи API: только хэши. Выпуск — scripts/make_api_key.py\n"
                          + yaml.safe_dump({"keys": keys}, allow_unicode=True, sort_keys=False), encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
+    log_action("api_key", getpass.getuser(), name, f"роль: {role}")
     print(f"Ключ для «{name}» (роль: {role}) — сохраните, он показывается один раз:\n{key}")
 
 

@@ -18,6 +18,7 @@ from app.ui_admin import admin_page  # noqa: E402
 from app.ui_chat import chat_page  # noqa: E402
 from app.ui_common import APP_NAME, LOGO, inject_css  # noqa: E402
 from kbagent import auth  # noqa: E402
+from kbagent.actions import log_action  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
 COOKIE = "kb_session"
@@ -60,6 +61,7 @@ def login_page() -> None:
             submitted = st.form_submit_button("Войти", type="primary", use_container_width=True)
         if submitted:
             user = auth.authenticate(login, password)
+            log_action("login" if user else "login_failed", login.strip() or "—")
             if user:
                 token = auth.create_session(user)
                 st.session_state.update(user=user, token=token, set_cookie=token, logged_out=False)
@@ -95,6 +97,7 @@ with st.sidebar:
     st.divider()
     st.markdown(f"**{ctx['name']}**  \n:gray[{ctx['role']}]")
     if settings.auth_required and st.button("Выйти", icon=":material/logout:", key="logout", type="tertiary"):
+        log_action("logout", ctx["login"])
         auth.end_session(st.session_state.get("token"))
         for k in ("user", "token", "conv", "ctx"):
             st.session_state.pop(k, None)
