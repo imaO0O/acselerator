@@ -70,22 +70,37 @@ def gaps() -> None:
     topics, total = find_gaps(_records())
     st.caption("Вопросы сотрудников, на которые в документах и учёте не нашлось ответа. Похожие формулировки "
                "собраны в одну тему — это список того, что стоит дописать в регламенты или загрузить в базу знаний.")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Вопросов сотрудников", total["questions"])
     share = f" ({100 * total['unanswered'] / total['questions']:.0f} %)" if total["questions"] else ""
     c2.metric("Без ответа", f"{total['unanswered']}{share}")
-    c3.metric("Тем без ответа", total["topics"])
-    if not topics:
-        st.info("Пока все вопросы сотрудников получили ответ.")
-        return
-    df = pd.DataFrame([{"Тема (как спрашивали чаще всего)": t["question"], "Раз": t["count"],
-                        "Сотрудников": t["users"], "Роли": ", ".join(t["roles"]), "Последний раз": display(t["last"])[:16],
-                        "Другие формулировки": "; ".join(t["other"]) or "—"} for t in topics])
-    st.dataframe(df, hide_index=True, use_container_width=True,
-                 column_config={"Тема (как спрашивали чаще всего)": st.column_config.TextColumn(width="large"),
-                                "Другие формулировки": st.column_config.TextColumn(width="large")})
-    st.download_button("Выгрузить в CSV", _csv(df), file_name="probely_v_dokumentacii.csv",
-                       icon=":material/download:", key="gaps-csv")
+    c3.metric("Открытых тем", total["topics"])
+    c4.metric("Закрыто тем", total["closed"], help="Позже на этот вопрос нашёлся ответ — например, после загрузки регламента")
+    opened = [t for t in topics if not t["closed"]]
+    closed = [t for t in topics if t["closed"]]
+    if opened:
+        df = pd.DataFrame([{"Тема (как спрашивали чаще всего)": t["question"], "Раз": t["count"],
+                            "Сотрудников": t["users"], "Роли": ", ".join(t["roles"]),
+                            "Последний раз": display(t["last"])[:16],
+                            "Другие формулировки": "; ".join(t["other"]) or "—",
+                            "Ответ есть для ролей": ", ".join(t["other_roles"]) or "—"} for t in opened])
+        st.dataframe(df, hide_index=True, use_container_width=True,
+                     column_config={"Тема (как спрашивали чаще всего)": st.column_config.TextColumn(width="large"),
+                                    "Другие формулировки": st.column_config.TextColumn(width="large"),
+                                    "Ответ есть для ролей": st.column_config.TextColumn(
+                                        help="Документ есть, но закрыт для роли, которая спрашивала: "
+                                             "это вопрос прав доступа, а не пробел в документах")})
+        st.download_button("Выгрузить в CSV", _csv(df), file_name="probely_v_dokumentacii.csv",
+                           icon=":material/download:", key="gaps-csv")
+    else:
+        st.info("Открытых пробелов нет: на все вопросы сотрудников агент сейчас отвечает.")
+    if closed:
+        with st.expander(f"Закрытые пробелы: {len(closed)} — на эти вопросы агент теперь отвечает"):
+            st.dataframe(pd.DataFrame([{"Тема": t["question"], "Раз спрашивали": t["count"],
+                                        "Роли": ", ".join(t["roles"]), "Без ответа до": display(t["last"])[:16],
+                                        "Закрыт": display(t["closed"])[:16]} for t in closed]),
+                         hide_index=True, use_container_width=True,
+                         column_config={"Тема": st.column_config.TextColumn(width="large")})
 
 
 def security() -> None:

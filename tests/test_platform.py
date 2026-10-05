@@ -132,8 +132,29 @@ def test_unanswered_questions_are_grouped_into_topics():
                rec("Что делать при искрении?", "answer"),
                rec("Сколько стоит поверка осциллографа?", "no_data", user="eval")]       # прогон эталона — не в счёт
     topics, total = find_gaps(records)
-    assert total == {"questions": 4, "unanswered": 3, "topics": 2}
+    assert total == {"questions": 4, "unanswered": 3, "topics": 2, "closed": 0}
     assert topics[0]["count"] == 2 and topics[0]["users"] == 2 and topics[0]["last"] == "2026-10-05 11:00:00"
+
+
+def test_gap_closes_when_the_same_question_is_answered_later():
+    from kbagent.gaps import find_gaps
+    rec = lambda q, status, t, user="petrov", role="Инженер производства": {  # noqa: E731
+        "time": t, "user": user, "role": role, "question": q, "status": status, "route": "documents"}
+    records = [rec("Какая температура припоя в ванне селективной пайки?", "no_data", "2026-10-05 10:00:00"),
+               rec("Где взять пропуск на склад?", "no_data", "2026-10-05 10:05:00"),
+               # загрузили регламент — тот же вопрос получил ответ (в том числе при проверке администратором)
+               rec("Какая температура припоя в ванне селективной пайки?", "answer", "2026-10-05 12:00:00", user="eval"),
+               # ответ на более общий вопрос или под другой ролью пробел не закрывает
+               rec("Где склад?", "answer", "2026-10-05 12:00:00"),
+               rec("Где взять пропуск на склад?", "answer", "2026-10-05 12:00:00", role="Администратор"),
+               # случайный ответ, после которого снова нет ответа, — пробел открыт
+               rec("Где взять пропуск на склад?", "answer", "2026-10-05 13:00:00"),
+               rec("Где взять пропуск на склад?", "no_data", "2026-10-05 14:00:00", user="eval")]
+    topics, total = find_gaps(records)
+    assert total["topics"] == 1 and total["closed"] == 1
+    assert topics[0]["question"] == "Где взять пропуск на склад?" and not topics[0]["closed"]
+    assert topics[0]["other_roles"] == ["Администратор"]        # ответ есть, но для другой роли — права доступа
+    assert topics[1]["closed"] == "2026-10-05 12:00:00"
 
 
 def test_actions_journal_records_who_did_what(tmp_settings):

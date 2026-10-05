@@ -109,15 +109,15 @@ def main():
 
     if settings.db_path == demo_db.DB:
         demo_db.ensure_current()
-    shift = demo_db.offset()
     questions = yaml.safe_load(Path(args.questions).read_text(encoding="utf-8"))["questions"]
     if args.only:
         questions = [q for q in questions if q["id"] in args.only.split(",")]
     agent = Agent()
     rows = []
     for q in questions:
-        must = [expand_dates(m, shift) for m in q.get("must_include", [])]
         r = ask_with_history(agent, q, q.get("role", args.role))     # у вопроса может быть своя роль
+        # сдвиг дат — после ответа: прогон может захватить полночь, и база сдвинет даты на день
+        must = [expand_dates(m, demo_db.offset()) for m in q.get("must_include", [])]
         # факты ищутся в тексте ответа: таблица записей под ним не оправдывает «Записей нет» в тексте
         evidence = r.text
         row = {"id": q["id"], "group": q.get("group", "основной"), "type": q["type"], "question": q["question"],
