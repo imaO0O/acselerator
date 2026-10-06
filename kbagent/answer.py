@@ -95,6 +95,18 @@ def _valid_refs(text: str, n_hits: int) -> list[int]:
     return sorted({n for g in REF_RE.findall(text) for n in _ref_numbers(g) if 1 <= n <= n_hits})
 
 
+CLAUSE_IN_REF_RE = re.compile(r"\[([^\[\]\n]*\d+\.\d+[^\[\]\n]*)\]")
+
+
+def _strip_clause_refs(text: str) -> str:
+    """«[1, 4.2]» — модель вписала в ссылку номер пункта: оставляем номер фрагмента «[1]».
+    Ссылка из одних номеров пунктов («[4.2]») — не ссылка на фрагмент: остаётся «(п. 4.2)»."""
+    def keep(m):
+        nums = [t for t in re.split(r"[,;\s]+", m.group(1)) if re.fullmatch(r"\d{1,2}", t)]
+        return f"[{', '.join(nums)}]" if nums else f"(п. {m.group(1).strip()})"
+    return CLAUSE_IN_REF_RE.sub(keep, text)
+
+
 def _clean_refs(text: str, valid: list[int]) -> str:
     """Убирает из ссылок номера несуществующих фрагментов: [1, 9] → [1]."""
     def keep(m):
@@ -398,6 +410,44 @@ def _wrong_case_values(question: str, text: str, hits: list[Hit]) -> tuple[list[
     return (wrong, own[0].strip(" ;,.")) if wrong else None
 
 
+# виды продукции в одном пункте: «комплектующие — 3 дня, ЭРИ — 5 дней»; спросили о материалах — их там нет
+KINDS = {"комплектующих изделий": r"комплектующ\w*", "ЭРИ": r"\bЭРИ\b|электрорадиоизд\w*", "материалов": r"материал\w*"}
+
+
+def _other_kind(question: str, text: str, hits: list[Hit], cited: list[int]):
+    """Число из ответа взято из предложения о другом виде продукции. Возвращает (вид из вопроса, предложение
+    о спрошенном виде или None, номер фрагмента, пункт)."""
+    asked = [k for k, rx in KINDS.items() if re.search(rx, question, re.I)]
+    units = _num_units(REF_RE.sub("", text))
+    if len(asked) != 1 or not units:
+        return None
+    kind = asked[0]
+    own, foreign = None, None
+    for n in cited:
+        for sentence in SENTENCE_RE.split(hits[n - 1].chunk.text):
+            found = _num_units(_drop_number(sentence))      # номер пункта «3.2» в начале — не число с единицей
+            if not found:
+                continue
+            mentions = {k for k, rx in KINDS.items() if re.search(rx, sentence, re.I)}
+            if kind in mentions and own is None:
+                own = (sentence.strip(), n)
+            if found & units:
+                if kind in mentions:
+                    return None                       # значение из предложения о спрошенном виде
+                if mentions and foreign is None:
+                    foreign = n
+    if foreign is None:
+        return None
+    if own is not None:
+        return kind, own[0], own[1], hits[own[1] - 1].chunk.clause
+    return kind, None, foreign, hits[foreign - 1].chunk.clause
+
+
+def _drop_number(sentence: str) -> str:
+    """«3.2 Входной контроль…» → «Входной контроль…»."""
+    return re.sub(r"^\s*\d{1,3}(?:\.\d{1,3})*\.?\s+", "", sentence).strip()
+
+
 def _asked_case(question: str) -> str | None:
     """«категории В» из вопроса «что делать при отказе категории В?»."""
     for rx in QUALIFIERS:
@@ -421,6 +471,12 @@ def verify(question: str, text: str, hits: list[Hit], cited: list[int]) -> bool:
         question=question, answer=text, fragments=fragments)}], max_tokens=5)
     return "НЕТ" not in out.upper()
 
+
+# вопрос о стоимости: в ответе должна быть сумма, иначе это пересказ соседних сведений («межповерочный
+# интервал — один год») под видом ответа; «цена деления» шкалы — не о деньгах
+PRICE_Q_RE = re.compile(r"сколько стоит|стоимост\w*|\bцен[аыуе]?\b(?!\s+делени)|расценк\w*|тариф\w*", re.I)
+MONEY_RE = re.compile(r"\d[\d\s]*(?:[.,]\d+)?\s*(?:₽|руб\w*|р\.)", re.I)
+YES_RE = re.compile(r"^\s*Да\b[.,!:]?\s*")
 
 REFUSAL_RE = re.compile(
     r"(?:нет|не содерж\w*|отсутству\w*)\s+(?:\w+\s+){0,2}(?:информаци\w*|сведени\w*)|"
@@ -466,12 +522,14 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
     ]
     try:
         text, gen = llm.chat(messages)
+        text = _strip_clause_refs(text)
         if _too_short(text):
             # односложный ответ вроде «Да [1].» на вопрос «в какой срок…» — просим конкретику
             messages += [{"role": "assistant", "content": text},
                          {"role": "user", "content": "Ответ слишком краткий. Перепиши его полным предложением, "
                                                      "приведя конкретные сведения из фрагмента со ссылкой [n]."}]
             text, gen2 = llm.chat(messages)
+            text = _strip_clause_refs(text)
             gen["seconds"] = round(gen["seconds"] + gen2["seconds"], 2)
     except llm.ModelError as e:
         return Answer("error", f"Языковая модель недоступна: {e}", hits=hits, stats=stats)
@@ -488,6 +546,7 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
                          {"role": "user", "content": "Укажи в ответе ссылки [n] на фрагменты, на которых он основан. "
                                                      f"Если ответ не следует из фрагментов — ответь {NO_DATA}."}]
             text, gen2 = llm.chat(messages)
+            text = _strip_clause_refs(text)
             stats["seconds"] = round(stats.get("seconds", 0) + gen2["seconds"], 2)
         except llm.ModelError:
             pass
@@ -497,6 +556,9 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
     text = _strip_service_lines(_clean_refs(text, valid))
     if _is_refusal(text):
         return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
+    if PRICE_Q_RE.search(question) and not MONEY_RE.search(text):
+        stats["no_price"] = True
+        return Answer("model_refused", "В документах нет сведений о стоимости.", hits=hits, stats=stats)
     if not valid or _too_short(text):
         return Answer("unverified", "Не удалось подтвердить ответ ссылкой на документ.", hits=hits, stats=stats)
     if retrieval.best_score < settings.confident_threshold or retrieval.scored_by != "reranker":
@@ -520,6 +582,7 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
                                                          "случаям сразу, со ссылками [n]. Требования для других "
                                                          "случаев не приводи."}]
                 retry, _ = llm.chat(messages)
+                retry = _strip_clause_refs(retry)
                 retry = _strip_service_lines(_clean_refs(retry, _valid_refs(retry, len(hits))))
                 again, _ = _drop_other_cases(question, retry, hits)
                 if NO_DATA not in retry and not _is_refusal(again) and not _too_short(again):
@@ -541,6 +604,7 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
                                                      f"Для случая из вопроса во фрагменте сказано: «{mixup[1]}». "
                                                      "Перепиши ответ по этой части, со ссылкой [n]."}]
             retry, _ = llm.chat(messages)
+            retry = _strip_clause_refs(retry)
             retry = _strip_service_lines(_clean_refs(retry, _valid_refs(retry, len(hits))))
         except llm.ModelError:
             retry = ""
@@ -550,6 +614,21 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
                           hits=hits, stats=stats)
         text, valid = retry, _valid_refs(retry, len(hits))
         stats["case_mixup_fixed"] = True
+    other = _other_kind(question, text, hits, valid)
+    if other:
+        # «срок входного контроля материалов» → «3 рабочих дня» из предложения о комплектующих изделиях
+        kind, own, n, clause = other
+        stats["other_kind"] = kind
+        if own:
+            return Answer("answer", f"{_drop_number(own).rstrip('.')} [{n}].", cited=[n], hits=hits, stats=stats)
+        sentences = [x.strip() for x in SENTENCE_RE.split(hits[n - 1].chunk.text) if _num_units(_drop_number(x))
+                     and any(re.search(rx, x, re.I) for rx in KINDS.values())]
+        number = re.match(r"\s*(\d{1,3}(?:\.\d{1,3})+)", sentences[0]) if sentences else None
+        where = f"п. {number.group(1)}" if number else f"п. {clause}" if clause else "найденном пункте"
+        quote = " ".join(_drop_number(x) for x in sentences)
+        return Answer("model_refused", f"Для {kind} в документах требования не нашёл. В {where} требования "
+                                       f"установлены для других видов продукции: «{quote}» [{n}].",
+                      cited=[n], hits=hits, stats=stats)
     checked, bans = _drop_unsupported_bans(text, hits)
     if bans:
         stats["bans_dropped"] = bans
@@ -572,6 +651,15 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
     text, garbled = _fix_garbled(text, hits, question)
     if garbled:
         stats["garbled_fixed"] = garbled
+    if YES_RE.match(text) and not OPEN_QUESTION_RE.match(question):
+        # «Не дозвонились за 5 минут — звонить главному инженеру?» → «Да. … в течение 10 минут…»:
+        # число из вопроса пунктом не подтверждено — «Да» убираем, остаётся само правило со ссылкой
+        source = _num_units(" ".join(hits[n - 1].chunk.text for n in cited))
+        units = {u for _, u in source}
+        if any(u in units and (num, u) not in source for num, u in _num_units(question)):
+            stats["yes_dropped"] = True
+            text = YES_RE.sub("", text)
+            text = text[:1].upper() + text[1:]
     if OPEN_QUESTION_RE.match(question):
         # «Что делать при искрении?» → «Нет. При искрении…»: правило о неверной посылке сработало
         # на вопросе, который не предполагает ответа «да/нет», — убираем лишнее «Нет»

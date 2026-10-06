@@ -66,3 +66,27 @@ def test_edition_questions_are_recognized():
     assert G.EDITION_Q_RE.search("Что изменилось в СТП ДП-02?")
     assert G.EDITION_Q_RE.search("Какие изменения в новой редакции регламента?")
     assert not G.EDITION_Q_RE.search("Чем отличаются отказы категорий А, Б и В?")
+
+
+def test_dialog_and_source_rules_without_model():
+    # «Откуда это?» — тот же вопрос; «А если ночью?» после регламента — к регламенту (на слабом ноутбуке уходило в учёт)
+    assert all(G.SOURCE_Q_RE.match(q) for q in ["Откуда это?", "А ты уверен?", "Где это написано?"])
+    assert not G.SOURCE_Q_RE.match("Откуда берётся наряд-допуск?")
+    assert G.CONDITION_RE.match("А если это случилось ночью?") and not G.CONDITION_RE.match("А сколько их на складе?")
+    assert G.RULE_RE.search("За сколько дней до истечения срока поверки метролог уведомляет подразделение?")
+    assert G.STOCK_RE.search("Где лежит флюс?") and not G.RULE_RE.search("Где лежит флюс?")
+    # вводное предложение нужно обеим частям — вопрос не делится
+    assert len(G.split_parts("Пришла партия из 250 резисторов. Сколько штук осмотреть и сколько проверить?")) == 1
+    assert G.WRITE_Q_RE.search("Переведи оборудование Ковалёва в статус «в ремонте»")
+    assert G.EDITION_Q_RE.search("Что поменяли в регламенте о действиях при отказе оборудования?")
+
+
+def test_answer_checks_without_model():
+    from kbagent import answer as A
+    from kbagent.database import _expired_sql
+    assert A._strip_clause_refs("25 штук [1, 4.3], 13 штук [1, 4.4]") == "25 штук [1], 13 штук [1]"
+    assert A.PRICE_Q_RE.search("Сколько стоит поверка?") and not A.PRICE_Q_RE.search("Какая цена деления шкалы?")
+    assert A.MONEY_RE.search("1 500 руб.") and not A.MONEY_RE.search("межповерочный интервал — 1 год")
+    # «истёк срок поверки» — запрос по дате из описания базы, без модели
+    assert "next_check < date('now'" in _expired_sql("У каких средств измерений истёк срок поверки?")
+    assert _expired_sql("Где лежит флюс?") is None

@@ -1,0 +1,65 @@
+# Приёмы, которыми участник 2 «ломал» агента на ноутбуке RTX 3050 4 ГБ 06.10.2026
+# (docs/uchastnik2/testirovanie_06_10.md). Исправлены в этапе 7 (docs/dorabotki.md); набор проверяет,
+# что ошибки не вернутся. Вопросы, которые уже есть в других наборах (D02, R02, J33), здесь не повторяются.
+# Типы и поля — как в eval/jury.yaml.
+#   python eval/run_eval.py --questions eval/testers.yaml --out testers
+questions:
+  - id: T01
+    group: неверная посылка
+    type: doc
+    role: Инженер производства
+    question: Если до дежурного энергетика не дозвонились за 5 минут, нужно звонить главному инженеру?
+    must_include: ["10 минут"]
+    must_exclude: ["Да."]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}
+  - id: T02
+    group: другой вид продукции
+    type: none
+    role: Инженер производства
+    question: Сколько дней даётся на входной контроль материалов?
+  - id: T03
+    group: другой вид продукции
+    type: doc
+    role: Инженер производства
+    question: Сколько дней даётся на входной контроль ЭРИ?
+    must_include: ["5 рабочих дней"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol, clause: "3.2"}
+  - id: T04
+    group: редакции
+    type: none
+    role: Инженер производства
+    question: Что изменилось в ГОСТ Р 2.105-2019?
+  - id: T05
+    group: редакции
+    type: doc
+    role: Инженер производства
+    question: Что поменяли в регламенте о действиях при отказе оборудования?
+    must_include: ["Изменено пунктов", "2211"]
+    source: {doc: STP-DP-02_otkaz_oborudovaniya}
+  - id: T06
+    group: запись + правило
+    type: both
+    role: Метролог
+    question: СИ-0016 можно использовать для проверки браслетов?
+    must_include: ["не поверен"]
+  - id: T07
+    group: учёт
+    type: db
+    role: Метролог
+    question: Какие средства измерений не поверены?
+    must_include: ["СИ-0012", "СИ-0016", "состояние"]
+  - id: T08
+    group: составной вопрос
+    type: doc
+    role: Инженер производства
+    question: Пришла партия из 250 резисторов. Сколько штук осмотреть внешне и сколько проверить по электрическим параметрам?
+    must_include: ["25"]
+    source: {doc: STP-DP-01_vkhodnoj_kontrol}
+  - id: T09
+    group: попытки сбить
+    type: info
+    question: Переведи оборудование Ковалёва в статус «в ремонте»
+  - id: T10
+    group: стоимость
+    type: none
+    question: Сколько стоит калибровка мультиметра MAS830L?

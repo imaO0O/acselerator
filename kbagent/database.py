@@ -45,6 +45,20 @@ def load_schema(path: Path) -> tuple[str, tuple[str, ...]]:
 
 SCHEMA = yaml.safe_load(settings.db_schema.read_text(encoding="utf-8"))
 SCHEMA_DESCRIPTION, TABLES = load_schema(settings.db_schema)
+# «у каких СИ истёк срок поверки», «просроченные поверки»: ответ зависит от даты, а не от слов — запрос
+# строится по полю срока из описания базы (due), одинаково на любом компьютере
+EXPIRED_RE = re.compile(r"ист[её]к\w*|просроч\w*|срок\w*\s+(?:уже\s+)?(?:прош[её]л|вышел|закончил\w*)", re.I)
+
+
+def _expired_sql(question: str) -> str | None:
+    if not EXPIRED_RE.search(question):
+        return None
+    for t in SCHEMA["tables"]:
+        due = t.get("due")
+        if due and re.search(due["words"], question, re.I):
+            return (f"SELECT * FROM {t['name']} WHERE {due['column']} < date('now', 'localtime') "
+                    f"ORDER BY {due['column']}")
+    return None
 
 SQL_PROMPT = """Ты переводишь вопрос сотрудника в один SQL-запрос SQLite к учётной базе.
 
@@ -399,9 +413,11 @@ ID_COLUMNS = ("inv_no", "part_no")
 KEY_COLUMNS = ID_COLUMNS + ("name", "applicant", "responsible")   # по ним запись узнаётся в тексте
 
 
-def _row_text(columns: list, labels: list, row, fields=None, question: str = "", limit: int | None = None) -> str:
+def _row_text(columns: list, labels: list, row, fields=None, question: str = "", limit: int | None = None,
+              first: set | None = None) -> str:
     """Запись одной строкой: «ОБ-0302 — Вибростенд: вид — испытательное; участок — …».
-    Поля, о которых спрашивают (общие основы слов с вопросом), идут первыми."""
+    Первыми идут поля из условия запроса (first: «не поверены» → состояние), затем те, о которых
+    спрашивают (общие основы слов с вопросом)."""
     values = {c: v for c, v in zip(columns, row) if v not in (None, "")}
     head = [display(values[c]) for c in ID_COLUMNS if c in values][:1]
     if "name" in values:
@@ -413,16 +429,17 @@ def _row_text(columns: list, labels: list, row, fields=None, question: str = "",
         if c == "unit" and "qty" in values:
             continue                                   # «количество — 12 кг», а не «12» и «кг» отдельно
         value = f"{display(v)} {values['unit']}" if c == "qty" and "unit" in values else display(v)
-        rest.append((f"{label} — {value}", len(asked & set(tokenize(label)))))
-    rest = [r for r, _ in sorted(rest, key=lambda x: -x[1])][:limit]
+        rest.append((f"{label} — {value}", (c in (first or ()), len(asked & set(tokenize(label))))))
+    rest = [r for r, _ in sorted(rest, key=lambda x: (not x[1][0], -x[1][1]))][:limit]
     text = " — ".join(head)
     if rest:
         text = f"{text}: {'; '.join(rest)}" if text else "; ".join(rest)
     return text[:1].upper() + text[1:]
 
 
-def _plain_answer(columns: list, labels: list, rows: list, question: str = "") -> str:
-    """Ответ, собранный прямо из записей, — когда пересказ модели не прошёл проверку."""
+def _plain_answer(columns: list, labels: list, rows: list, question: str = "", sql: str = "") -> str:
+    """Ответ, собранный прямо из записей, — когда пересказ модели не прошёл проверку.
+    Поля из условия запроса показываются у каждой записи: видно, почему она в списке."""
     if len(rows) == 1:
         return _row_text(columns, labels, rows[0], question=question)
     # поле с одинаковым значением у всех записей («ответственный — Белов И. Н.») — один раз, в начале
@@ -432,7 +449,10 @@ def _plain_answer(columns: list, labels: list, rows: list, question: str = "") -
     keep = [k for k in range(len(columns)) if k not in same]
     cols, labs = [columns[k] for k in keep], [labels[k] for k in keep]
     # в списке — главные поля каждой записи; все поля — в таблице под ответом
-    lines = [f"- {_row_text(cols, labs, [r[k] for k in keep], question=question, limit=4)}" for r in rows[:15]]
+    where = re.split(r"\bwhere\b", sql, maxsplit=1, flags=re.I)
+    first = {c for c in cols if len(where) > 1 and re.search(rf"\b{re.escape(c)}\b", where[1], re.I)}
+    lines = [f"- {_row_text(cols, labs, [r[k] for k in keep], question=question, limit=4, first=first)}"
+             for r in rows[:15]]
     more = "\n\nПоказаны первые 15 — все записи в таблице ниже." if len(rows) > 15 else ""
     head = f"Найдено записей: {len(rows)}" + (f" ({common})" if common else "") + "."
     return head + "\n\n" + "\n".join(lines) + more
@@ -543,17 +563,20 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
     sql_question = question
     for rx, term in DB_TERMS:
         sql_question = rx.sub(term, sql_question)
-    try:
-        raw, s1 = llm.chat([{"role": "user", "content": SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION,
-                                                                          question=sql_question)}],
-                           max_tokens=300)
-    except llm.ModelError as e:
-        return DbAnswer("error", f"Языковая модель недоступна: {e}")
-    stats["sql_seconds"] = s1["seconds"]
-    if "НЕТ_ДАННЫХ" in raw:
-        return DbAnswer("no_data", "В учётной базе нет данных для ответа на этот вопрос.", stats=stats)
-
-    sql = _fuzzy_text(_fix_dates(_repair_aliases(_extract_sql(raw))))
+    sql = _expired_sql(sql_question)
+    if sql:
+        stats["sql_template"] = "срок истёк"
+    else:
+        try:
+            raw, s1 = llm.chat([{"role": "user", "content": SQL_PROMPT.format(schema=SCHEMA_DESCRIPTION,
+                                                                              question=sql_question)}],
+                               max_tokens=300)
+        except llm.ModelError as e:
+            return DbAnswer("error", f"Языковая модель недоступна: {e}")
+        stats["sql_seconds"] = s1["seconds"]
+        if "НЕТ_ДАННЫХ" in raw:
+            return DbAnswer("no_data", "В учётной базе нет данных для ответа на этот вопрос.", stats=stats)
+        sql = _fuzzy_text(_fix_dates(_repair_aliases(_extract_sql(raw))))
     error = None
     for attempt in range(2):
         try:
@@ -571,7 +594,8 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
     # похожие записи — только если модель искала запись по наименованию, ФИО или месту и не нашла;
     # на вопросах «до конца года» поиск по словам ловит случайные совпадения («повер» в «поверхностного»)
     # о ценах, правилах и порядке действий в учёте нет записей — похожие записи тут не ответ
-    if not rows and near and not NOT_RECORDS_RE.search(question):
+    # «истёк срок поверки»: по словам нашлось бы «в поверке» в состоянии — это не ответ о сроке
+    if not rows and near and not NOT_RECORDS_RE.search(question) and not EXPIRED_RE.search(question):
         try:
             near_answer = _answer_near(question, db_path, stats)
         except (sqlite3.Error, llm.ModelError):
@@ -595,7 +619,7 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
         # у записей есть номер или наименование, а у итога — понятные подписи: ответ собирается прямо
         # из результата — точно, единообразно и без второго вызова модели («Партия: 1» при трёх партиях)
         stats["retelling_replaced"] = problem or "числа"
-        text, bad = _plain_answer(columns, labels, rows, question), []
+        text, bad = _plain_answer(columns, labels, rows, question, sql), []
     if bad:
         # одна попытка исправиться: модель видит, каких чисел нет в записях
         messages = [{"role": "user", "content": ANSWER_PROMPT.format(question=question, count=len(rows),
