@@ -31,6 +31,20 @@ def test_vague_and_compound_questions():
         "Что делать при искрении оборудования", "к кому обращаться"]
     assert G.split_parts("Сколько действует наряд-допуск и где лежит флюс?") == [
         "Сколько действует наряд-допуск", "где лежит флюс"]
+    # часть с местоимением продолжает первую — отдельно (например, по учётной базе) не отвечается
+    for part in ["куда её перемещают", "как быстро на них реагирует ремонтная служба", "где она проводится"]:
+        assert G.ANAPHORA_RE.search(part), part
+    for part in ["где лежит флюс", "каким паяльником работать", "сколько всего на складе"]:
+        assert not G.ANAPHORA_RE.search(part), part
+
+
+def test_sources_have_no_control_characters():
+    # «\b» в шаблоне, записанном через оболочку, однажды превратился в символ 0x08, и проверка молча не работала
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for path in [*root.glob("kbagent/*.py"), *root.glob("app/*.py"), *root.glob("api/*.py"), *root.glob("scripts/*.py")]:
+        text = path.read_text(encoding="utf-8")
+        assert not any(ord(c) < 32 and c not in "\n\r\t" for c in text), path.name
 
 
 def test_editions_are_matched_by_text_not_by_number(monkeypatch):
