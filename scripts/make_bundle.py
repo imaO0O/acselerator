@@ -52,11 +52,22 @@ if errorlevel 1 (
     xcopy /e /i /q llama-cpu agent\tools\llama.cpp >nul
     echo Запуск моделей: agent\scripts\start_servers.bat -Cpu
 ) else (
-    echo Запуск моделей: agent\scripts\start_servers.bat
+    set VRAM=0
+    for /f "tokens=1" %%m in ('nvidia-smi --query-gpu^=memory.total --format^=csv^,noheader^,nounits') do set VRAM=%%m
+    call :mode
 )
 echo Чат: agent\scripts\run_chat.bat   Проверка: agent\.venv\Scripts\python agent\scripts\check_demo.py
 echo === Готово ===
 pause
+exit /b 0
+
+:mode
+rem видеокарта меньше 10 ГБ: модели целиком не помещаются, нужен режим -SmallGpu
+if %VRAM% LSS 10000 (
+    echo Видеокарта %VRAM% МБ. Запуск моделей: agent\scripts\start_servers.bat -SmallGpu
+) else (
+    echo Запуск моделей: agent\scripts\start_servers.bat
+)
 exit /b 0
 
 :error
@@ -72,13 +83,20 @@ README = """Установка AI-агента на компьютер без д
 2. Запустите install.bat. Он поставит Python 3.12 (если его нет), создаст окружение agent\\.venv,
    установит пакеты из папки wheels и выберет сборку llama.cpp: для видеокарты NVIDIA или для процессора.
    Интернет не нужен.
-3. Запустите модели: agent\\scripts\\start_servers.bat (с видеокартой) или agent\\scripts\\start_servers.bat -Cpu.
+3. Запустите модели (install.bat в конце подскажет нужный режим):
+   - видеокарта NVIDIA от 12 ГБ:         agent\\scripts\\start_servers.bat
+   - видеокарта NVIDIA 4–8 ГБ (ноутбук): agent\\scripts\\start_servers.bat -SmallGpu
+   - без видеокарты NVIDIA:              agent\\scripts\\start_servers.bat -Cpu
+   Остановка моделей — agent\\scripts\\stop_servers.bat.
 4. Запустите чат: agent\\scripts\\run_chat.bat — откроется в браузере на этом компьютере.
 5. Перед работой смените тестовые пароли: agent\\.venv\\Scripts\\python agent\\scripts\\make_users.py
    (пароли — в самом скрипте), документы предприятия добавляются на странице «Администрирование».
+6. Проверьте установку: agent\\.venv\\Scripts\\python agent\\scripts\\check_demo.py
+   Проверяются модели, учётная база и вопросы сценария показа под нужными ролями; в конце должно быть
+   «ГОТОВО К ПОКАЗУ». Если нет — в выводе сказано, какая проверка не прошла.
 
-Требования: Windows 10/11 x64, 16 ГБ оперативной памяти, около 12 ГБ на диске; видеокарта NVIDIA
-от 4 ГБ — по желанию (без неё ответ около 4,4 с, с ней — 1–2 с).
+Требования: Windows 10/11 x64, 16 ГБ оперативной памяти, около 12 ГБ на диске. Видеокарта NVIDIA —
+по желанию; ответ, медиана: от 12 ГБ — 1,2 с, 4–8 ГБ (-SmallGpu) — 2,3 с, без видеокарты — 4,4 с.
 """
 
 
