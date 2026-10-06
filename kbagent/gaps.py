@@ -14,12 +14,15 @@ from .text import tokenize
 
 UNANSWERED = {"no_data", "model_refused", "unverified"}
 SERVICE_USERS = {None, "", "eval"}       # прогоны эталона и проверки перед показом
-SIMILAR = 0.5                            # доля общих основ слов, при которой вопросы — одна тема
+SIMILAR = 0.5                            # больше этой доли общих основ слов — одна тема («стоит поверка» и
+                                         # «стоит ремонт» осциллографа — 0,5, разные темы)
+SYNONYMS = {"стоимост": "сто", "цен": "сто", "стоят": "сто"}      # «сколько стоит» = «стоимость» = «цена»
+ADMIN_ROLE = "Администратор"             # видит все документы — подсказкой о правах доступа не служит
 CLOSED_SIMILAR = 0.8                     # ответ на почти тот же вопрос, а не на более общий, — пробел закрыт
 
 
 def _words(record: dict) -> set[str]:
-    return set(tokenize(record.get("asked") or record.get("question") or ""))
+    return {SYNONYMS.get(w, w) for w in tokenize(record.get("asked") or record.get("question") or "")}
 
 
 def _similar(a: set[str], b: set[str]) -> float:
@@ -35,6 +38,8 @@ def _answering_since(words: list[set[str]], attempts: list[tuple[dict, set[str]]
     same = [a for a, w in attempts if any(_similar(w, x) >= CLOSED_SIMILAR for x in words)]
     for a in sorted(same, key=lambda a: a.get("time", "")):
         role = a.get("role") or "—"
+        if a.get("unapproved"):
+            continue                    # ответ по неутверждённому документу пробел ещё не закрывает
         if a.get("status") != "answer":
             since.pop(role, None)
         else:
@@ -51,7 +56,7 @@ def find_gaps(records: list[dict]) -> tuple[list[dict], dict]:
     for r in sorted(misses, key=lambda x: x.get("time", "")):
         words = _words(r)
         best = max(topics, key=lambda t: len(words & t["words"]) / len(words | t["words"]), default=None)
-        if best is not None and len(words & best["words"]) / len(words | best["words"]) >= SIMILAR:
+        if best is not None and len(words & best["words"]) / len(words | best["words"]) > SIMILAR:
             best["records"].append(r)
             best["words"] |= words
         else:
@@ -67,7 +72,7 @@ def find_gaps(records: list[dict]) -> tuple[list[dict], dict]:
                     "users": len({r.get("user") for r in recs}), "roles": sorted({r.get("role") or "—" for r in recs}),
                     "last": max(r.get("time", "") for r in recs),
                     "other": [q for q, _ in phrasings.most_common()[1:4]], "closed": since.get(role, ""),
-                    "other_roles": sorted(r for r in since if r != role)})
+                    "other_roles": sorted(r for r in since if r not in (role, ADMIN_ROLE))})
     out.sort(key=lambda g: g["last"], reverse=True)      # при равном числе — недавние выше
     out.sort(key=lambda g: g["count"], reverse=True)
     out.sort(key=lambda g: bool(g["closed"]))             # открытые — первыми

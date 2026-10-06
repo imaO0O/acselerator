@@ -95,7 +95,8 @@ def order_docx(path: Path, correct: bool) -> None:
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY if correct else WD_ALIGN_PARAGRAPH.LEFT
         p.paragraph_format.first_line_indent = Cm(1.25 if correct else 1.0)
 
-    doc.add_paragraph("ДЕМО. Вымышленный документ для демонстрации нормоконтроля.")
+    stamp = doc.add_paragraph("ДЕМО. Вымышленный документ для демонстрации нормоконтроля.")
+    stamp.alignment = WD_ALIGN_PARAGRAPH.RIGHT        # пометка-штамп, а не текст документа
     center("ООО «Демо-Прибор»")
     center("ПРИКАЗ", bold=True)
     doc.add_paragraph(("05.10.2026" if correct else "2026/10/05") + "\t\t\t\t\t\t№ 45")

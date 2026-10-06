@@ -3,9 +3,11 @@
 Загружать и удалять документы может только администратор (проверяется в интерфейсе).
 Загруженный документ сразу участвует в поиске, но до утверждения помечается
 «загружен пользователем, не утверждён» — и в ссылке на источник, и предупреждением под ответом.
-Если документ загружен как новая редакция другого («заменяет»), старая редакция
-отменяется и перестаёт участвовать в поиске; при удалении новой — возвращается.
+Если документ загружен как новая редакция другого («заменяет»), до утверждения это проект: его видит
+только администратор, сотрудники получают ответы по действующей редакции. После утверждения старая
+редакция отменяется и перестаёт участвовать в поиске; при удалении новой — возвращается.
 """
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -14,7 +16,7 @@ import yaml
 
 from .actions import log_action
 from .config import settings
-from .ingest import access_of, load_catalog
+from .ingest import ARCHIVE, access_of, is_draft_edition, load_catalog
 from .store import Index
 
 UPLOAD_DIR = settings.raw_dir / "uploaded"
@@ -36,7 +38,10 @@ def _write_catalog(docs: list[dict]) -> None:
 
 
 def doc_id_for(filename: str) -> str:
-    stem = re.sub(r"[^\w\-]+", "_", Path(filename).stem).strip("_")[:60]
+    """Тот же файл повторно — тот же id (замена); длинные имена, различающиеся в конце, — разные id."""
+    stem = re.sub(r"[^\w\-]+", "_", Path(filename).stem).strip("_")
+    if len(stem) > 60:
+        stem = f"{stem[:52]}_{hashlib.sha1(stem.encode('utf-8')).hexdigest()[:7]}"
     return f"upl_{stem or 'document'}"
 
 
@@ -132,6 +137,8 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
 
 
 def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:
+    """Утверждение: документ помечается утверждённым; проект новой редакции становится доступен всем,
+    а прежняя редакция отменяется."""
     docs = _read_catalog()
     for d in docs:
         if d["id"] == doc_id:
@@ -139,7 +146,12 @@ def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:
                      approved_at=time.strftime("%Y-%m-%d %H:%M"))
     _write_catalog(docs)
     index.update_meta(doc_id, settings.index_dir, doc_kind=KIND_APPROVED)
-    log_action("approve", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id))
+    _sync_access(index, doc_id)
+    replaced = next((d.get("replaces") for d in docs if d["id"] == doc_id), None)
+    if replaced:
+        _sync_access(index, replaced)
+    log_action("approve", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id),
+               f"прежняя редакция отменена: {replaced}" if replaced else "")
 
 
 def list_uploads() -> list[dict]:
@@ -166,8 +178,9 @@ def documents(index: Index) -> list[dict]:
     out = []
     for doc_id, info in catalog.items():
         if doc_id in present:
+            status = ("отменён" if access_of(info) == ARCHIVE else
+                      "проект новой редакции" if is_draft_edition(info) else "действует")
             out.append({"id": doc_id, "title": info.get("title", doc_id), "kind": info.get("kind", ""),
-                        "access": info.get("access", "all"),
-                        "status": "отменён" if access_of(info) == "archive" else "действует",
+                        "access": info.get("access", "all"), "status": status,
                         "replaced_by": info.get("replaced_by")})
     return out

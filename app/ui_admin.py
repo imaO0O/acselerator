@@ -166,7 +166,7 @@ def docs() -> None:
                               format_func=ACCESS_LABELS.get)
         replaces = c2.selectbox("Новая редакция документа", [None] + list(active),
                                 format_func=lambda x: "— не заменяет другой документ —" if x is None else active[x],
-                                help="Прежняя редакция будет отменена и перестанет участвовать в поиске")
+                                help="До утверждения новую редакцию видит только администратор, сотрудники получают ответы по действующей. После «Утвердить» прежняя редакция отменяется и перестаёт участвовать в поиске")
         st.session_state.setdefault("upload_key", 0)
         files = st.file_uploader("Файлы", type=["pdf", "docx"], accept_multiple_files=True,
                                  key=f"uploader-{st.session_state.upload_key}", label_visibility="collapsed")
@@ -186,12 +186,14 @@ def docs() -> None:
                     if res["replaced_same"]:
                         notices.append(("warning", f"Заменён ранее загруженный «{res['title']}»"))
                     if replaces:
-                        notices.append(("info", f"Прежняя редакция «{active[replaces]}» отменена"))
+                        notices.append(("info", f"Это проект новой редакции «{active[replaces]}»: пока его видит "
+                                                f"только администратор, сотрудники получают ответы по действующей. "
+                                                f"После «Утвердить» прежняя редакция будет отменена."))
                         cmp = compare(replaces, res["id"])
-                        notices.append(("info", f"По сравнению с прежней редакцией: изменено пунктов — "
+                        notices.append(("info", f"По сравнению с действующей редакцией: изменено пунктов — "
                                                 f"{cmp.count('changed')}, добавлено — {cmp.count('added')}, "
-                                                f"исключено — {cmp.count('removed')}. Подробно — в чате: "
-                                                f"«Что изменилось в {res['title']}?»"))
+                                                f"исключено — {cmp.count('removed')}. Подробно — в чате после "
+                                                f"утверждения: «Что изменилось в {res['title']}?»"))
                 except Exception as e:  # noqa: BLE001 — показать администратору причину
                     notices.append(("error", f"«{f.name}»: {e}"))
                 bar.empty()
@@ -205,7 +207,8 @@ def docs() -> None:
         st.markdown("**Загруженные документы**")
         for d in uploads:
             c1, c2, c3 = st.columns([6, 2, 1], vertical_alignment="center")
-            state = "утверждён" if d.get("approved") else "ждёт утверждения"
+            state = ("утверждён" if d.get("approved") else
+                     "проект новой редакции — виден только администратору" if d.get("replaces") else "ждёт утверждения")
             c1.markdown(f"{d['title']}  \n:gray[{ACCESS_LABELS.get(d.get('access'), d.get('access'))} · "
                         f"загрузил {d.get('uploaded_by') or '—'} {d.get('uploaded_at', '')} · {state}]")
             if not d.get("approved") and c2.button("Утвердить", key=f"ok-{d['id']}", icon=":material/check:"):

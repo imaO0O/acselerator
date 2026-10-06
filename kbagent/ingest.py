@@ -286,6 +286,7 @@ def _chunks(units: list[_Unit], meta: dict) -> list[Chunk]:
 # ---------- каталог документов ----------
 
 ARCHIVE = "archive"   # группа доступа отменённых редакций: её нет ни у одной роли
+DRAFT = "admin"       # проект новой редакции до утверждения видит только администратор
 
 
 def is_cancelled(info: dict) -> bool:
@@ -300,16 +301,24 @@ def load_catalog(raw_dir: Path) -> dict[str, dict]:
         if path.exists():
             for d in yaml.safe_load(path.read_text(encoding="utf-8"))["documents"]:
                 catalog[d["id"]] = d
-    # новая редакция, загруженная с пометкой «заменяет X», отменяет X
+    # новая редакция, загруженная с пометкой «заменяет X», отменяет X — только после утверждения:
+    # черновик с ошибкой не должен подменять действующий регламент для всех сотрудников
     for d in list(catalog.values()):
         old = catalog.get(d.get("replaces"))
-        if old is not None and not is_cancelled(d):
+        if old is not None and not is_cancelled(d) and not is_draft_edition(d):
             old.update(status="отменён", replaced_by=d["id"])
     return catalog
 
 
+def is_draft_edition(info: dict) -> bool:
+    """Загруженная новая редакция, которую ещё не утвердили (у документов из sources.yaml поля approved нет)."""
+    return bool(info.get("replaces")) and not info.get("approved", True)
+
+
 def access_of(info: dict) -> str:
-    return ARCHIVE if is_cancelled(info) else info.get("access", "all")
+    if is_cancelled(info):
+        return ARCHIVE
+    return DRAFT if is_draft_edition(info) else info.get("access", "all")
 
 
 def parse_document(path: Path, catalog: dict, stats: dict | None = None) -> list[Chunk]:

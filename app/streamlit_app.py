@@ -61,13 +61,18 @@ def login_page() -> None:
             submitted = st.form_submit_button("Войти", type="primary", use_container_width=True)
         if submitted:
             user = auth.authenticate(login, password)
-            log_action("login" if user else "login_failed", login.strip() or "—")
+            locked = auth.locked_for(login)
+            log_action("login" if user else "login_locked" if locked else "login_failed", login.strip() or "—")
             if user:
                 token = auth.create_session(user)
                 st.session_state.update(user=user, token=token, set_cookie=token, logged_out=False)
                 st.session_state.pop("conv", None)
                 st.rerun()
-            st.error("Неверный логин или пароль.")
+            if locked:
+                st.error(f"Слишком много неудачных попыток. Вход под этим логином закрыт ещё на "
+                         f"{max(1, round(locked / 60))} мин.")
+            else:
+                st.error("Неверный логин или пароль.")
         st.caption("Нет доступа? Обратитесь к администратору системы.")
     st.stop()
 

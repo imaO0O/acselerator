@@ -4,7 +4,8 @@ import io
 import re
 
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Cm, Mm, Pt, RGBColor
 
 from .database import display
 
@@ -41,9 +42,23 @@ def _text(doc, text: str) -> None:
 def answer_docx(item: dict, app_name: str, user: str | None = None) -> bytes:
     """item — элемент диалога чата: question, text, sources, columns/labels/rows, at, route, status."""
     doc = Document()
+    # оформление по ГОСТ Р 7.0.97 — тому же, по которому агент проверяет документы: A4, поля 20/10/20/20 мм,
+    # Times New Roman 12, абзацный отступ 1,25 см, выравнивание по ширине
+    for section in doc.sections:
+        section.page_width, section.page_height = Mm(210), Mm(297)
+        section.left_margin, section.right_margin = Mm(20), Mm(10)
+        section.top_margin, section.bottom_margin = Mm(20), Mm(20)
     style = doc.styles["Normal"]
     style.font.name = "Times New Roman"
     style.font.size = Pt(12)
+    style.paragraph_format.first_line_indent = Cm(1.25)
+    style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    style.paragraph_format.space_after = Pt(0)
+    for name in ("Heading 2", "List Bullet", "List Number"):
+        doc.styles[name].font.name = "Times New Roman"
+    heading = doc.styles["Heading 2"]
+    heading.font.size, heading.font.color.rgb = Pt(13), RGBColor(0, 0, 0)
+    heading.paragraph_format.first_line_indent = Cm(0)
 
     doc.add_heading("Вопрос", level=2)
     doc.add_paragraph(item["question"])
@@ -72,7 +87,7 @@ def answer_docx(item: dict, app_name: str, user: str | None = None) -> bytes:
     run = note.add_run(f"{app_name}. Сформировано {item.get('at', '')}" + (f", пользователь {user}" if user else "")
                        + ". Ответ составлен только по документам и учётной базе предприятия; перед применением "
                          "сверьте с источником.")
-    run.italic, run.font.size, run.font.color.rgb = True, Pt(9), GRAY
+    run.italic, run.font.color.rgb = True, GRAY
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

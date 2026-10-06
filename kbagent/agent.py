@@ -749,6 +749,8 @@ class Agent:
         settings.log_dir.mkdir(parents=True, exist_ok=True)
         record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "user": user, "role": r.role, "question": mask(r.question),
                   "asked": mask(r.asked), "route": r.route, "status": r.status, "answer": mask(r.text), "seconds": r.seconds,
-                  "cited": [s["label"] for s in r.sources if s["cited"]], "sql": r.sql}
+                  "cited": [s["label"] for s in r.sources if s["cited"]], "sql": r.sql,
+                  # ответ по документу, загруженному и ещё не утверждённому, — пробел в документации не закрывает
+                  "unapproved": any(s.get("doc_kind") == "Загруженный документ" for s in r.sources if s["cited"])}
         with open(settings.log_dir / "audit.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

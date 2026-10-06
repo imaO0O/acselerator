@@ -18,6 +18,8 @@ from .config import settings
 
 ITERATIONS = 200_000
 SESSION_TTL = 12 * 3600          # сеанс живёт 12 часов
+LOCK_AFTER = 5                   # неудачных попыток подряд — и вход под этим логином закрывается
+LOCK_SECONDS = 300               # на 5 минут
 HISTORY_LIMIT = 100              # сколько реплик хранить в одном диалоге
 
 
@@ -43,11 +45,55 @@ def load_users() -> dict[str, dict]:
     return {u["login"]: u for u in users}
 
 
+_DUMMY_HASH: list[str] = []
+
+
+def _failures_path() -> Path:
+    return settings.log_dir / "login_failures.json"
+
+
+def _read_failures() -> dict:
+    try:
+        return json.loads(_failures_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def locked_for(login: str) -> int:
+    """Сколько секунд вход под этим логином ещё закрыт после череды неудачных попыток (0 — открыт)."""
+    rec = _read_failures().get(login.strip().lower(), {})
+    return max(0, int(rec.get("until", 0) - time.time()))
+
+
+def _register(login: str, ok: bool) -> None:
+    failures = _read_failures()
+    if ok:
+        failures.pop(login, None)
+    else:
+        rec = failures.get(login, {"count": 0})
+        if rec.get("until", 0) and rec["until"] <= time.time():
+            rec = {"count": 0}                    # прошлая блокировка истекла — считаем заново
+        rec["count"] += 1
+        if rec["count"] >= LOCK_AFTER:
+            rec["until"] = time.time() + LOCK_SECONDS
+        failures[login] = rec
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    _failures_path().write_text(json.dumps(failures), encoding="utf-8")
+
+
 def authenticate(login: str, password: str) -> dict | None:
-    user = load_users().get(login.strip().lower())
-    if user and verify_password(password, user["password_hash"]):
-        return {"login": user["login"], "name": user["name"], "role": user["role"]}
-    return None
+    """Пользователь или None. После LOCK_AFTER неудач подряд логин закрыт на LOCK_SECONDS, даже с верным паролем.
+    Для неизвестного логина пароль тоже сверяется с хэшем, чтобы по времени ответа нельзя было узнать,
+    какие логины существуют."""
+    login = login.strip().lower()
+    if locked_for(login):
+        return None
+    user = load_users().get(login)
+    if not _DUMMY_HASH:
+        _DUMMY_HASH.append(hash_password(secrets.token_hex(8)))
+    ok = verify_password(password, user["password_hash"] if user else _DUMMY_HASH[0]) and user is not None
+    _register(login, ok)
+    return {"login": user["login"], "name": user["name"], "role": user["role"]} if ok else None
 
 
 # ---------- сеансы ----------

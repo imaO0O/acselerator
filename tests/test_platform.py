@@ -146,6 +146,7 @@ def test_gap_closes_when_the_same_question_is_answered_later():
                rec("Какая температура припоя в ванне селективной пайки?", "answer", "2026-10-05 12:00:00", user="eval"),
                # ответ на более общий вопрос или под другой ролью пробел не закрывает
                rec("Где склад?", "answer", "2026-10-05 12:00:00"),
+               rec("Где взять пропуск на склад?", "answer", "2026-10-05 12:00:00", role="Метролог"),
                rec("Где взять пропуск на склад?", "answer", "2026-10-05 12:00:00", role="Администратор"),
                # случайный ответ, после которого снова нет ответа, — пробел открыт
                rec("Где взять пропуск на склад?", "answer", "2026-10-05 13:00:00"),
@@ -153,7 +154,8 @@ def test_gap_closes_when_the_same_question_is_answered_later():
     topics, total = find_gaps(records)
     assert total["topics"] == 1 and total["closed"] == 1
     assert topics[0]["question"] == "Где взять пропуск на склад?" and not topics[0]["closed"]
-    assert topics[0]["other_roles"] == ["Администратор"]        # ответ есть, но для другой роли — права доступа
+    # ответ есть, но для другой роли — права доступа; администратор видит всё и подсказкой не служит
+    assert topics[0]["other_roles"] == ["Метролог"]
     assert topics[1]["closed"] == "2026-10-05 12:00:00"
 
 
@@ -174,6 +176,37 @@ def test_personal_data_is_masked_but_work_details_stay(tmp_settings):
     for secret in ["Пётр Сергеевич", "345-67-89", "p.ivanov", "123456", "112-233-445"]:
         assert secret not in masked
     assert "Белов И. Н." in masked and "2211" in masked
+
+
+def test_names_are_masked_in_any_case_and_order(tmp_settings):
+    from kbagent.privacy import mask
+    # примеры участника 2 (docs/uchastnik2/proverki/t_privacy.py): косвенные падежи, порядок «И О Ф», регистр
+    leaks = {"Передайте Белову Игорю Николаевичу, тел. 8 (4912) 12-34-56: где флюс?": ["Николаевичу", "12-34-56"],
+             "Передайте Сидоровой Анне Петровне акт": ["Сидоровой", "Петровне"],
+             "Иван Петрович Сидоров уволен?": ["Сидоров"], "Кузьмин Фома Ильич заболел": ["Кузьмин", "Ильич"],
+             "ИВАНОВ ИВАН ИВАНОВИЧ": ["ИВАНОВИЧ"], "Римская-Корсакова Мария Андреевна": ["Римская"],
+             "СНИЛС 12345678901, паспорт серия 6123 номер 456789": ["12345678901", "456789"]}
+    for text, secrets in leaks.items():
+        assert not any(s in mask(text) for s in secrets), text
+    # рабочие сведения и похожие на отчество прилагательные не трогаются
+    for text in ["Кому сообщает начальник ночной смены?", "Это основной документ", "Ответственный Белов И. Н.",
+                 "партия П-2609-04, 120 шт, поступила 02.10.2026", "телефон диспетчера 2211"]:
+        assert mask(text) == text, text
+
+
+def test_login_is_locked_after_failed_attempts(tmp_settings, tmp_path, monkeypatch):
+    import yaml
+    from kbagent import auth
+    users = tmp_path / "users.yaml"
+    users.write_text(yaml.safe_dump({"users": [{"login": "ivanov", "name": "Иванов", "role": "Инженер производства",
+                                                "password_hash": auth.hash_password("верный")}]}), encoding="utf-8")
+    monkeypatch.setattr(tmp_settings, "users_path", users)
+    assert auth.authenticate("ivanov", "верный")
+    for _ in range(auth.LOCK_AFTER):
+        assert auth.authenticate("ivanov", "неверный") is None
+    assert auth.locked_for("ivanov") > 0
+    assert auth.authenticate("ivanov", "верный") is None          # подбор остановлен и с верным паролем
+    assert auth.locked_for("petrov") == 0                         # другие логины не затронуты
 
 
 def test_old_journal_records_are_pruned(tmp_settings, tmp_path):
@@ -198,3 +231,36 @@ def test_normocontrol_finds_formatting_errors(tmp_path):
     issues = check_docx(bad.read_bytes()).issues
     assert {i.clause for i in issues} == {"6.1", "3.3", "3.4", "3.5", "5.17", "5.10"}
     assert check_docx(good.read_bytes()).issues == []
+
+
+def test_draft_edition_does_not_cancel_current_until_approved(tmp_path):
+    import yaml
+    from kbagent.ingest import ARCHIVE, DRAFT, access_of, load_catalog
+    raw = tmp_path / "raw"
+    (raw / "uploaded").mkdir(parents=True)
+    (tmp_path / "sources.yaml").write_text(yaml.safe_dump({"documents": [{"id": "stp_02", "title": "СТП ДП-02"}]}),
+                                           encoding="utf-8")
+    draft = {"id": "upl_stp_02_new", "title": "СТП ДП-02 (проект)", "replaces": "stp_02", "approved": False}
+    (raw / "uploaded" / "catalog.yaml").write_text(yaml.safe_dump({"documents": [draft]}), encoding="utf-8")
+    cat = load_catalog(raw)
+    # проект с ошибкой не подменяет действующий регламент: сотрудники по-прежнему видят старую редакцию
+    assert access_of(cat["stp_02"]) == "all" and access_of(cat["upl_stp_02_new"]) == DRAFT
+    (raw / "uploaded" / "catalog.yaml").write_text(yaml.safe_dump({"documents": [{**draft, "approved": True}]}),
+                                                   encoding="utf-8")
+    cat = load_catalog(raw)
+    assert access_of(cat["stp_02"]) == ARCHIVE and cat["stp_02"]["replaced_by"] == "upl_stp_02_new"
+    assert access_of(cat["upl_stp_02_new"]) == "all"
+
+
+def test_gap_topics_are_not_glued_and_drafts_do_not_close_them():
+    from kbagent.gaps import find_gaps
+    rec = lambda q, status, t, **kw: {"time": t, "user": "petrov", "role": "Инженер производства",  # noqa: E731
+                                      "question": q, "status": status, "route": "documents", **kw}
+    topics, total = find_gaps([rec("Сколько стоит поверка осциллографа?", "no_data", "2026-10-05 10:00:00"),
+                               rec("Сколько стоит ремонт осциллографа?", "no_data", "2026-10-05 10:01:00"),
+                               rec("Какая цена поверки осциллографа?", "no_data", "2026-10-05 10:02:00")])
+    assert total["topics"] == 2           # «цена поверки» — к «стоит поверка», «ремонт» — отдельно
+    q = "Какая температура пайки в селективной ванне?"
+    topics, total = find_gaps([rec(q, "no_data", "2026-10-05 10:00:00"),
+                               rec(q, "answer", "2026-10-05 11:00:00", unapproved=True)])
+    assert total == {"questions": 2, "unanswered": 1, "topics": 1, "closed": 0}

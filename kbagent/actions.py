@@ -12,6 +12,7 @@ from .config import settings
 ACTIONS = {
     "login": "Вход",
     "login_failed": "Неудачная попытка входа",
+    "login_locked": "Вход закрыт после неудачных попыток",
     "logout": "Выход",
     "upload": "Загрузка документа",
     "approve": "Утверждение документа",
