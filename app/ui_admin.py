@@ -246,6 +246,7 @@ def quality() -> None:
     results = ROOT / "eval" / "results"
     main, jury, roles = (_report(results / f"{n}.md") for n in ("latest", "jury", "roles"))
     laptop, small = _report(results / "laptop.md"), _report(results / "smallgpu.md")
+    notebook = _report(results / "laptop3050.md")        # настоящий ноутбук RTX 3050 4 ГБ (участник 2)
     if main is None:
         st.info("Результатов проверки качества пока нет: python eval/run_eval.py")
         return
@@ -262,10 +263,13 @@ def quality() -> None:
     c[0].metric("Вопросы «с ходу», как от жюри", f"{jury['ok']} из {jury['total']}" if jury else "—")
     c[1].metric("Разграничение доступа по ролям", f"{roles['ok']} из {roles['total']}" if roles else "—")
     c[2].metric("Ответ на видеокарте, медиана", seconds(main))
-    c[3].metric("Ноутбук: без видеокарты / 4 ГБ", f"{seconds(laptop)} / {seconds(small)}")
+    c[3].metric("Ноутбук с видеокартой 4 ГБ, медиана", seconds(notebook) if notebook else seconds(small),
+                help="Ноутбук RTX 3050 4 ГБ (режим -SmallGpu). Без видеокарты NVIDIA ответ — около минуты")
     for title, rep in [(f"Эталон — все {main['total']} вопросов", main), ("Вопросы «с ходу», как от жюри", jury),
-                       ("Разграничение доступа по ролям", roles), ("Эталон на ноутбуке без видеокарты", laptop),
-                       ("Эталон на ноутбуке с небольшой видеокартой", small)]:
+                       ("Разграничение доступа по ролям", roles),
+                       ("Эталон на ноутбуке RTX 3050 4 ГБ", notebook),
+                       ("Эталон на ПК в режиме видеокарты 4 ГБ (-SmallGpu)", small),
+                       ("Эталон на ПК, модель в оперативной памяти (-Cpu)", laptop)]:
         if rep:
             with st.expander(f"{title} — {rep['ok']} из {rep['total']}, прогон {display(rep['date'])}"):
                 st.markdown(rep["body"])

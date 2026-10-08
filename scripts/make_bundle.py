@@ -48,6 +48,7 @@ agent\.venv\Scripts\python -m pip install --no-index --find-links wheels -r agen
 where nvidia-smi >nul 2>nul
 if errorlevel 1 (
     echo Видеокарта NVIDIA не найдена - ставлю сборку llama.cpp для процессора
+    echo Без видеокарты ответ занимает около минуты: это режим для пробы. Для работы нужна видеокарта NVIDIA от 4 ГБ.
     rmdir /s /q agent\tools\llama.cpp
     xcopy /e /i /q llama-cpu agent\tools\llama.cpp >nul
     echo Запуск моделей: agent\scripts\start_servers.bat -Cpu
@@ -86,7 +87,7 @@ README = """Установка AI-агента на компьютер без д
 3. Запустите модели (install.bat в конце подскажет нужный режим):
    - видеокарта NVIDIA от 12 ГБ:         agent\\scripts\\start_servers.bat
    - видеокарта NVIDIA 4–8 ГБ (ноутбук): agent\\scripts\\start_servers.bat -SmallGpu
-   - без видеокарты NVIDIA:              agent\\scripts\\start_servers.bat -Cpu
+   - без видеокарты NVIDIA:              agent\\scripts\\start_servers.bat -Cpu  (ответ около минуты — для пробы)
    Остановка моделей — agent\\scripts\\stop_servers.bat.
 4. Запустите чат: agent\\scripts\\run_chat.bat — откроется в браузере на этом компьютере.
 5. Перед работой смените тестовые пароли: agent\\.venv\\Scripts\\python agent\\scripts\\make_users.py
@@ -96,7 +97,8 @@ README = """Установка AI-агента на компьютер без д
    «ГОТОВО К ПОКАЗУ». Если нет — в выводе сказано, какая проверка не прошла.
 
 Требования: Windows 10/11 x64, 16 ГБ оперативной памяти, около 12 ГБ на диске. Видеокарта NVIDIA —
-по желанию; ответ, медиана: от 12 ГБ — 1,2 с, 4–8 ГБ (-SmallGpu) — 2,3 с, без видеокарты — 4,4 с.
+нужна для работы; ответ, медиана: 12 ГБ — 1,2 с, ноутбук с 4 ГБ (-SmallGpu) — около 8 с; без видеокарты —
+около минуты, только для пробы.
 """
 
 

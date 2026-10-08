@@ -27,7 +27,7 @@ TEMPLATE = HERE / "shablon.pptx"
 
 RESULTS = {
     "correct": "49 из 49", "refusals": "12 из 12", "db": "15 из 15", "wrong": "0",
-    "questions": "85", "time_gpu": "1,2 с", "time_cpu": "около 4,4 с",
+    "questions": "85", "time_gpu": "1,2 с", "time_laptop": "8,4 с",
 }
 
 PURPLE = RGBColor(0x80, 0x64, 0xA2)
@@ -332,8 +332,8 @@ def draw_architecture(slide):
 
     YF, HF = 6.12, 0.82
     facts = [("Отечественная модель", "GigaChat 3.1 Lightning, MIT, без иностранных весов"),
-             ("Без интернета", "одна видеокарта 12 ГБ или только процессор"),
-             ("Скорость", f"{RESULTS['time_gpu']} на ответ (RTX 5070), {RESULTS['time_cpu']} без видеокарты"),
+             ("Без интернета", "одна видеокарта: 12 ГБ на ПК или 4 ГБ на ноутбуке"),
+             ("Скорость", f"{RESULTS['time_gpu']} на ответ (RTX 5070), {RESULTS['time_laptop']} на ноутбуке (RTX 3050 4 ГБ)"),
              ("Указ № 529", "критическая технология № 13, сквозная № 25")]
     fw = (12.3 - 3 * 0.2) / 4
     for i, (t, s) in enumerate(facts):
