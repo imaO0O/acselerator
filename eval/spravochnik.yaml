@@ -1,0 +1,62 @@
+# Вопросы технического специалиста продаж и сервиса к справочнику параметров (data/spravochnik/pribory.csv).
+# Точное значение, единица и источник; проверка требования клиента и подбор — программой, без языковой модели.
+#   python eval/run_eval.py --questions eval/spravochnik.yaml --out spravochnik
+questions:
+  - id: S01
+    group: проверка требования
+    type: doc
+    question: Можно ли мультиметром MAS830L измерить ток 15 А?
+    must_include: ["не подходит", "10 А"]
+    source: {doc: multimeter_mas830l}
+  - id: S02
+    group: подбор
+    type: doc
+    question: Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?
+    must_include: ["АКИП-4143/1", "Подходят: 6"]
+    source: {doc: osc_akip_4143}
+  - id: S03
+    group: значение
+    type: doc
+    question: Какая полоса пропускания у АКИП-4115/2В?
+    must_include: ["200 МГц"]
+    source: {doc: osc_akip_4115v}
+  - id: S04
+    group: проверка требования
+    type: doc
+    question: Подойдёт ли паяльная станция SBK936B для пайки при 450 °C?
+    must_include: ["подходит", "200–480"]
+    source: {doc: solder_sbk936b}
+  - id: S05
+    group: значение
+    type: doc
+    question: Сколько весит мультиметр Юпитер 830B?
+    must_include: ["150 г"]
+    source: {doc: multimeter_jupiter_830b}
+  - id: S06
+    group: сравнение
+    type: doc
+    question: Чем отличаются АКИП-4122/1(V) и АКИП-4122/10(V)?
+    must_include: ["250 Мвыб/с", "500 Мвыб/с", "Различаются"]
+    source: {doc: [osc_portable, osc_akip_4122]}
+  - id: S07
+    group: противоречие
+    type: doc
+    question: Какая частота дискретизации у АКИП-4115/1В?
+    must_include: ["Источники расходятся", "1 Гвыб/с", "1 Гц/с"]
+    source: {doc: osc_akip_4115v}
+  - id: S08
+    group: подбор
+    type: doc
+    question: Какой мультиметр TDM измеряет сопротивление до 100 МОм?
+    must_include: ["DT9205A", "200 МОм"]
+    source: {doc: multimeter_tdm}
+  - id: S09
+    group: подбор
+    type: doc
+    question: Нужна паяльная станция с паяльником мощностью от 80 Вт
+    must_include: ["CXG DES H95", "Магистр Ц20-ДВ"]
+    source: {doc: [solder_cxg_h95, solder_magistr_c20]}
+  - id: S10
+    group: нет данных
+    type: none
+    question: Какое время нарастания у мультиметра MAS830L?

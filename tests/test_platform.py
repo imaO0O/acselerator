@@ -264,3 +264,21 @@ def test_gap_topics_are_not_glued_and_drafts_do_not_close_them():
     topics, total = find_gaps([rec(q, "no_data", "2026-10-05 10:00:00"),
                                rec(q, "answer", "2026-10-05 11:00:00", unapproved=True)])
     assert total == {"questions": 2, "unanswered": 1, "topics": 1, "closed": 0}
+
+
+def test_registry_dates_control_access_and_labels(tmp_path):
+    import time
+    import yaml
+    from kbagent.ingest import DRAFT, access_of, expired_on, load_catalog, registry_suffix
+    raw = tmp_path / "raw"
+    (raw / "internal").mkdir(parents=True)
+    future = time.strftime("%Y") + "9-01-01"          # заведомо будущая дата
+    docs = [{"id": "old", "title": "Приказ 903н", "effective_from": "2021-01-01", "effective_to": "2025-12-31"},
+            {"id": "soon", "title": "СТП ДП-09", "version": "2027", "effective_from": future, "access": "all"},
+            {"id": "now", "title": "СТП ДП-01", "version": "2026", "effective_from": "2026-03-01"}]
+    (tmp_path / "sources.yaml").write_text(yaml.safe_dump({"documents": docs}, allow_unicode=True), encoding="utf-8")
+    cat = load_catalog(raw)
+    assert expired_on(cat["old"]) == "2025-12-31" and access_of(cat["old"]) == "all"   # не прячем, а предупреждаем
+    assert access_of(cat["soon"]) == DRAFT                       # не вступил в силу — только администратору
+    assert registry_suffix("now", raw) == "ред. 2026, действует с 01.03.2026"
+    assert registry_suffix("old", raw) == "срок действия истёк 31.12.2025"

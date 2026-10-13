@@ -246,13 +246,20 @@ def build_docx(name: str, spec: dict) -> Path:
 
 # Группа доступа документа (демонстрация разграничения прав): «all» видят все роли.
 ACCESS = {"RI-DP-04_sredstva_izmerenij": "metrology"}
+# Реестр: владелец документа (кому направлять вопросы и противоречия); приоритет 1 — главный источник
+OWNERS = {"STP-DP-01_vkhodnoj_kontrol": "Начальник ОТК", "STP-DP-02_otkaz_oborudovaniya": "Главный механик",
+          "STP-DP-02-2024_otkaz_oborudovaniya": "Главный механик", "RI-DP-03_khranenie_eri": "Начальник склада",
+          "RI-DP-04_sredstva_izmerenij": "Главный метролог"}
 
 
 def write_catalog():
     docs = []
     for name, spec in DOCS.items():
+        day, month, year = spec.get("date", "01.03.2026").split(".")
         d = {"id": name, "title": f"{spec['code']} «{spec['title']}» (ДЕМО)",
-             "kind": "Внутренний регламент (демо)", "access": ACCESS.get(name, "all")}
+             "kind": "Внутренний регламент (демо)", "access": ACCESS.get(name, "all"),
+             "version": spec["code"].rsplit("-", 1)[-1], "effective_from": f"{year}-{month}-{day}",
+             "owner": OWNERS.get(name, ""), "priority": 1}
         if spec.get("status"):   # отменённая редакция: в индексе есть, в поиске не участвует
             d.update(status=spec["status"], replaced_by=spec["replaced_by"])
         docs.append(d)

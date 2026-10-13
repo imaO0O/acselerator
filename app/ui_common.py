@@ -21,7 +21,7 @@ USER_AVATAR = ":material/person:"
 ACCESS_LABELS = {"all": "Все сотрудники", "production": "Производство", "metrology": "Метрология",
                  "admin": "Только администратор", "archive": "Архив (отменён)"}
 ROUTE_LABELS = {"documents": "Документы", "database": "Учётная база", "both": "База и документы",
-                "help": "Справка", "normo": "Нормоконтроль"}
+                "help": "Справка", "normo": "Нормоконтроль", "spravochnik": "Справочник параметров"}
 STATUS_LABELS = {"answer": "Ответ", "no_data": "Нет в источниках", "model_refused": "Нет в найденном",
                  "unverified": "Не подтверждено", "clarify": "Уточнение", "info": "Справка", "error": "Ошибка"}
 
@@ -31,6 +31,7 @@ BADGES = {
     "database": ("Ответ по учётной базе", "blue", ":material/table_chart:"),
     "both": ("Учётная база и документы", "violet", ":material/join:"),
     "normo": ("Нормоконтроль по ГОСТ Р 7.0.97", "green", ":material/fact_check:"),
+    "spravochnik": ("Ответ по справочнику параметров", "blue", ":material/tune:"),
     "no_data": ("Ответа в источниках нет", "gray", ":material/search_off:"),
     "model_refused": ("Ответа в найденном нет", "gray", ":material/search_off:"),
     "unverified": ("Ответ не подтверждён ссылкой", "orange", ":material/warning:"),
@@ -45,7 +46,7 @@ CSS = """
 [data-testid="stFileUploaderDropzoneInstructions"] span { display: none; }
 [data-testid="stFileUploaderDropzoneInstructions"] small { display: none; }
 [data-testid="stFileUploaderDropzoneInstructions"] > div::before {
-    content: "Перетащите PDF или DOCX сюда"; font-size: .875rem; }
+    content: "Перетащите файл сюда"; font-size: .875rem; }
 [data-testid="stFileUploaderDropzoneInstructions"] > div::after {
     content: "до 100 МБ на файл"; display: block; font-size: .75rem; opacity: .7; }
 [data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] p { font-size: 0 !important; }

@@ -1,0 +1,23 @@
+# Правила расчётов, которые агент выполняет программой (а не языковой моделью).
+# Каждое правило ссылается на пункт документа; agreed — согласовано ли правило с владельцем документа
+# (например, способ округления, которого в стандарте нет). Пока agreed: false — в ответе есть пометка.
+rules:
+  - id: vk_vneshniy_osmotr
+    title: Внешний осмотр
+    doc: STP-DP-01_vkhodnoj_kontrol
+    clause: "4.3"
+    when: "осмотр|внешн"
+    percent: 10
+    minimum: 20
+    full_up_to: 100          # партия до 100 шт. включительно — сплошной контроль
+    rounding: вверх
+    agreed: false
+  - id: vk_elektricheskie_parametry
+    title: Проверка электрических параметров
+    doc: STP-DP-01_vkhodnoj_kontrol
+    clause: "4.4"
+    when: "электрическ|параметр"
+    percent: 5
+    minimum: 5
+    rounding: вверх
+    agreed: false

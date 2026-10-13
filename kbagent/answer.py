@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from . import llm
 from .config import settings
+from .ingest import registry_suffix
 from .retriever import Hit, Retrieval
 from .text import tokenize
 
@@ -62,7 +63,8 @@ def source_label(hit: Hit) -> str:
     if c.page_start:
         pages = c.page_start if c.page_start == c.page_end else f"{c.page_start}–{c.page_end}"
         parts.append(f"стр. {pages}")
-    return ", ".join(parts)
+    registry = registry_suffix(c.doc_id)
+    return ", ".join(parts) + (f" · {registry}" if registry else "")
 
 
 def _context(hits: list[Hit]) -> str:

@@ -4,16 +4,28 @@ documents:
   title: СТП ДП-01-2026 «Порядок входного контроля комплектующих изделий» (ДЕМО)
   kind: Внутренний регламент (демо)
   access: all
+  version: '2026'
+  effective_from: '2026-03-01'
+  owner: Начальник ОТК
+  priority: 1
 - id: STP-DP-02_otkaz_oborudovaniya
   title: СТП ДП-02-2026 «Действия персонала при отказе технологического оборудования»
     (ДЕМО)
   kind: Внутренний регламент (демо)
   access: all
+  version: '2026'
+  effective_from: '2026-03-01'
+  owner: Главный механик
+  priority: 1
 - id: STP-DP-02-2024_otkaz_oborudovaniya
   title: СТП ДП-02-2024 «Действия персонала при отказе технологического оборудования»
     (ДЕМО)
   kind: Внутренний регламент (демо)
   access: all
+  version: '2024'
+  effective_from: '2024-01-15'
+  owner: Главный механик
+  priority: 1
   status: отменён
   replaced_by: STP-DP-02_otkaz_oborudovaniya
 - id: RI-DP-03_khranenie_eri
@@ -21,7 +33,15 @@ documents:
     разрядов» (ДЕМО)
   kind: Внутренний регламент (демо)
   access: all
+  version: '2026'
+  effective_from: '2026-03-01'
+  owner: Начальник склада
+  priority: 1
 - id: RI-DP-04_sredstva_izmerenij
   title: РИ ДП-04-2026 «Порядок обращения со средствами измерений» (ДЕМО)
   kind: Внутренний регламент (демо)
   access: metrology
+  version: '2026'
+  effective_from: '2026-03-01'
+  owner: Главный метролог
+  priority: 1

@@ -8,12 +8,20 @@ documents:
   - id: ot_electro_903n
     title: "Правила по охране труда при эксплуатации электроустановок (Приказ Минтруда России от 15.12.2020 № 903н)"
     kind: "Правила по охране труда"
+    effective_from: "2021-01-01"
+    effective_to: "2025-12-31"          # «действует до 31 декабря 2025 года» — п. 3 приказа
+    owner: "Служба охраны труда"
+    priority: 1
     urls:
       - "http://mos.gosnadzor.ru/about/documents/Приказ Минтруда от 15.12.2020 № 903н-.pdf"
 
   - id: ot_instrument_835n
     title: "Правила по охране труда при работе с инструментом и приспособлениями (Приказ Минтруда России от 27.11.2020 № 835н)"
     kind: "Правила по охране труда"
+    effective_from: "2021-01-01"
+    effective_to: "2025-12-31"          # «действует до 31 декабря 2025 года» — п. 3 приказа
+    owner: "Служба охраны труда"
+    priority: 1
     urls:
       - "https://www.nstu.ru/static_files/63200/Mintrud_Pr_835_27.11.2020.pdf"
       - "https://rzot.ru/files/npa/PrikazMinTrudaN835n_27112020.pdf"
@@ -24,6 +32,10 @@ documents:
   - id: gost_r_2_105_2019
     title: "ГОСТ Р 2.105-2019 ЕСКД. Общие требования к текстовым документам"
     kind: "Стандарт"
+    version: "2019"
+    effective_from: "2020-02-01"
+    owner: "Отдел стандартизации"
+    priority: 1
     urls:
       - "https://guap.ru/standards/db/docs/GOST_R_2.105-2019.pdf"
       - "https://files.stroyinf.ru/Data2/1/4293730/4293730232.pdf"
@@ -32,6 +44,10 @@ documents:
   - id: gost_r_7_0_97_2016
     title: "ГОСТ Р 7.0.97-2016 Организационно-распорядительная документация. Требования к оформлению документов"
     kind: "Стандарт"
+    version: "2016, Изм. № 1"
+    effective_from: "2018-07-01"
+    owner: "Отдел стандартизации"
+    priority: 1
     urls:
       - "https://ifap.ru/library/gost/70972016.pdf"
 
@@ -39,65 +55,87 @@ documents:
   - id: multimeter_mas830l
     title: "Мультиметр цифровой MASTECH MAS830L. Инструкция по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://lib.net.ru/files/passports/psp-measure-mt-mas830l.pdf"
 
   - id: multimeter_jupiter_830b
     title: "Мультиметр цифровой Юпитер 830B (JP9104). Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://cdn.vseinstrumenti.ru/instruction/nomenclaturecontent/202209/15697395.pdf/yupiter-830b-jp9104-4745562.pdf"
 
   - id: multimeter_tdm
     title: "Мультиметры цифровые ударо-/пылезащищённые TDM. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://cdn21vek.by/img/galleries/1153/483/sq10050008_tdm_6195f7a23cd6c.pdf"
 
   - id: solder_magistr_c20
     title: "Паяльная станция «Магистр Ц20-ДВ». Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://magistr.su/wp-content/uploads/2016/02/C20-DV.pdf"
 
   - id: solder_lukey_852
     title: "Паяльная станция Lukey 852D+, 852D, 852AD, 852A. Инструкция по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://static.chipdip.ru/lib/170/DOC001170860.pdf"
 
   - id: solder_cxg_h95
     title: "Паяльная станция цифровая CXG DES H95. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://supereyes.ru/img/instructions/cxg_des_h95_manual.pdf"
 
   - id: solder_sbk936b
     title: "Паяльная станция SBK936B. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://technica-m.ru/upload/support_ext/bakon_sbk936b.pdf"
 
   - id: osc_akip_4115v
     title: "Осциллографы цифровые АКИП-4115/1В, АКИП-4115/2В. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://ntc-spektr.ru/upload/iblock/542/22ml9nxzlow9s7ps9s19n653o18faoc9/AKIP_4115_1V_2V.pdf"
 
   - id: osc_akip_4143
     title: "Осциллографы цифровые АКИП-4143/1, 4143/1А, 4143/2, 4143/2А. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://prist.ru/upload/iblock/526/9iypl8cuyp2ankcdnl5cuowe38t6pamt/AKIP_4143.pdf"
 
   - id: osc_akip_4122
     title: "Осциллографы цифровые АКИП-4122/7–4122/12. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://prist.ru/upload/iblock/d60/eglhjg6ki6j960n50d43t62c60mvucx9/AKIP_4122_7_8_9_10_11_12.pdf"
 
   - id: osc_portable
     title: "Осциллограф портативный цифровой. Руководство по эксплуатации"
     kind: "Руководство по эксплуатации"
+    owner: "Технический отдел"
+    priority: 2       # справочник параметров — главнее руководства
     urls:
       - "https://static.chipdip.ru/lib2/a/546/DOC067546878.pdf"

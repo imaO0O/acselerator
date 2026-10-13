@@ -16,7 +16,8 @@ import yaml
 
 from .actions import log_action
 from .config import settings
-from .ingest import ARCHIVE, access_of, is_draft_edition, load_catalog
+from .ingest import ARCHIVE, access_of, expired_on, is_draft_edition, load_catalog, not_yet_effective
+from .text import tokenize
 from .store import Index
 
 UPLOAD_DIR = settings.raw_dir / "uploaded"
@@ -100,7 +101,8 @@ def _sync_access(index: Index, doc_id: str) -> None:
 
 
 def add_upload(index: Index, filename: str, data: bytes, access: str = "all", user: str | None = None,
-               replaces: str | None = None, progress=None) -> dict:
+               replaces: str | None = None, progress=None, version: str = "", effective_from: str = "",
+               owner: str = "") -> dict:
     """Сохраняет файл, добавляет его в каталог и индекс.
     Возвращает id, title, chunks, replaced_same (перезаписан одноимённый), ocr_pages, scanned_pages."""
     ext = Path(filename).suffix.lower()
@@ -123,6 +125,8 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
              "uploaded_by": user, "uploaded_at": time.strftime("%Y-%m-%d %H:%M"), "approved": False}
     if replaces and replaces != doc_id:
         entry["replaces"] = replaces
+    # реестр: версия, дата вступления в силу (до неё документ видит только администратор), владелец
+    entry.update({k: v for k, v in (("version", version), ("effective_from", effective_from), ("owner", owner)) if v})
     _write_catalog([d for d in docs if d["id"] != doc_id] + [entry])
 
     stats: dict = {}
@@ -154,6 +158,20 @@ def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:
                f"прежняя редакция отменена: {replaced}" if replaced else "")
 
 
+def similar_documents(title: str, exclude: set[str] | None = None, threshold: float = 0.6) -> list[str]:
+    """Действующие документы с почти тем же названием — возможно, загружена новая редакция без отметки «заменяет»:
+    тогда в поиске окажутся обе редакции, и агент может сослаться на любую."""
+    words = set(tokenize(title))
+    out = []
+    for doc_id, info in load_catalog(settings.raw_dir).items():
+        if doc_id in (exclude or set()) or access_of(info) == ARCHIVE:
+            continue
+        other = set(tokenize(info.get("title", "")))
+        if words and other and len(words & other) / len(words | other) >= threshold:
+            out.append(info.get("title", doc_id))
+    return out
+
+
 def list_uploads() -> list[dict]:
     return _read_catalog()
 
@@ -178,9 +196,16 @@ def documents(index: Index) -> list[dict]:
     out = []
     for doc_id, info in catalog.items():
         if doc_id in present:
+            ru = lambda d: f"{d[8:10]}.{d[5:7]}.{d[:4]}"  # noqa: E731
             status = ("отменён" if access_of(info) == ARCHIVE else
-                      "проект новой редакции" if is_draft_edition(info) else "действует")
+                      "проект новой редакции" if is_draft_edition(info) else
+                      f"вступает в силу {ru(not_yet_effective(info))}" if not_yet_effective(info) else
+                      f"срок действия истёк {ru(expired_on(info))}" if expired_on(info) else "действует")
             out.append({"id": doc_id, "title": info.get("title", doc_id), "kind": info.get("kind", ""),
                         "access": info.get("access", "all"), "status": status,
+                        "version": info.get("version", ""), "owner": info.get("owner", ""),
+                        "effective": " – ".join(ru(str(info[k])[:10]) for k in ("effective_from", "effective_to")
+                                                if info.get(k)),
+                        "priority": info.get("priority", ""),
                         "replaced_by": info.get("replaced_by")})
     return out

@@ -90,3 +90,13 @@ def test_answer_checks_without_model():
     # «истёк срок поверки» — запрос по дате из описания базы, без модели
     assert "next_check < date('now'" in _expired_sql("У каких средств измерений истёк срок поверки?")
     assert _expired_sql("Где лежит флюс?") is None
+
+
+def test_calculations_follow_agreed_rules_not_the_model():
+    from kbagent import raschety as R
+    res = {r.rule.title: r for r in R.match("Пришла партия из 250 резисторов. Сколько штук осмотреть внешне "
+                                            "и сколько проверить по электрическим параметрам?")}
+    assert res["Внешний осмотр"].value == 25 and res["Проверка электрических параметров"].value == 13
+    assert [r.value for r in R.match("Партия 80 конденсаторов — сколько осмотреть?")] == [80]      # сплошной контроль
+    assert [r.value for r in R.match("Партия 60 шт — сколько проверить по электрическим параметрам?")] == [5]
+    assert R.match("Сколько дней даётся на входной контроль ЭРИ?") == []

@@ -15,7 +15,9 @@ from kbagent.gaps import find_gaps
 from kbagent.editions import compare
 from kbagent.database import display
 from kbagent.ingest import ocr_available
-from kbagent.uploads import add_upload, approve_upload, documents, list_uploads, remove_upload
+from kbagent.uploads import add_upload, approve_upload, documents, list_uploads, remove_upload, similar_documents
+from kbagent import experts, spravochnik
+from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
 
@@ -164,6 +166,11 @@ def docs() -> None:
         c1, c2 = st.columns(2)
         access = c1.selectbox("Кому доступен", [k for k in ACCESS_LABELS if k != "archive"],
                               format_func=ACCESS_LABELS.get)
+        r1, r2, r3 = st.columns(3)
+        version = r1.text_input("Версия (редакция)", placeholder="например, 2026 или Изм. 2")
+        start = r2.date_input("Действует с", value=None, format="DD.MM.YYYY",
+                              help="До этой даты документ видит только администратор")
+        owner = r3.text_input("Владелец документа", placeholder="кому направлять вопросы и противоречия")
         replaces = c2.selectbox("Новая редакция документа", [None] + list(active),
                                 format_func=lambda x: "— не заменяет другой документ —" if x is None else active[x],
                                 help="До утверждения новую редакцию видит только администратор, сотрудники получают ответы по действующей. После «Утвердить» прежняя редакция отменяется и перестаёт участвовать в поиске")
@@ -176,7 +183,8 @@ def docs() -> None:
                 bar = st.progress(0.0, text=f"Читаю «{f.name}»…")
                 try:
                     res = add_upload(agent.index, f.name, f.getvalue(), access=access, user=ctx()["login"],
-                                     replaces=replaces,
+                                     replaces=replaces, version=version.strip(), owner=owner.strip(),
+                                     effective_from=start.isoformat() if start else "",
                                      progress=lambda done, total, b=bar, name=f.name:
                                      b.progress(done / total, text=f"«{name}»: {done} из {total} фрагментов"))
                     notices.append(("success", f"«{res['title']}» добавлен: {res['chunks']} фрагментов")
@@ -185,6 +193,11 @@ def docs() -> None:
                         notices.append(("info", f"Распознано страниц-сканов: {res['ocr_pages']}"))
                     if res["replaced_same"]:
                         notices.append(("warning", f"Заменён ранее загруженный «{res['title']}»"))
+                    if not replaces:
+                        for other in similar_documents(res["title"], exclude={res["id"]}):
+                            notices.append(("warning", f"Похоже на новую редакцию «{other}». Если это так, удалите "
+                                                       "документ и загрузите заново с отметкой «Новая редакция "
+                                                       "документа» — иначе в поиске будут обе редакции."))
                     if replaces:
                         notices.append(("info", f"Это проект новой редакции «{active[replaces]}»: пока его видит "
                                                 f"только администратор, сотрудники получают ответы по действующей. "
@@ -218,15 +231,105 @@ def docs() -> None:
                 remove_upload(agent.index, d["id"], user=ctx()["login"])
                 st.rerun()
 
-    st.markdown("**Все документы базы знаний**")
-    df = pd.DataFrame(documents(agent.index)).reindex(columns=["title", "kind", "access", "status", "replaced_by"])
+    df = pd.DataFrame(documents(agent.index)).reindex(columns=["title", "version", "effective", "owner", "priority",
+                                                                "access", "status", "replaced_by"])
     titles = {d["id"]: d["title"] for d in documents(agent.index)}
     df["access"] = df["access"].map(lambda a: ACCESS_LABELS.get(a, a))
     df["replaced_by"] = df["replaced_by"].map(lambda r: titles.get(r, r) if isinstance(r, str) else "—")
     df = df.fillna("—")
-    df.columns = ["Документ", "Вид", "Доступ", "Статус", "Заменён на"]
+    df.columns = ["Документ", "Версия", "Срок действия", "Владелец", "Приоритет", "Доступ", "Статус", "Заменён на"]
+    st.markdown("**Реестр документов базы знаний**")
     st.dataframe(df, hide_index=True, use_container_width=True)
-    st.caption("Отменённые редакции хранятся для истории, но в поиске не участвуют.")
+    st.caption("Отменённые редакции хранятся для истории, но в поиске не участвуют. Документ, который ещё не вступил "
+               "в силу, видит только администратор. Если срок действия истёк, ссылка и ответ помечаются "
+               "предупреждением — замените документ новой редакцией. Приоритет 1 — главный источник при "
+               "расхождении (например, регламент или справочник параметров главнее руководства).")
+
+
+def reference() -> None:
+    """Справочник параметров: когда обновлён, что не прошло проверку, где источники расходятся."""
+    values, rep = spravochnik.load()
+    st.caption("Параметры продукции для ответов техническим специалистам: точное значение, единица и источник — "
+               "документ и страница. Агент только читает справочник; сравнение с требованием клиента и подбор "
+               "выполняет программа. Файл — CSV или XLSX с колонками: " + ", ".join(spravochnik.COLUMNS) + ".")
+    c = st.columns(4)
+    c[0].metric("Значений", rep.values)
+    c[1].metric("Моделей", rep.models)
+    c[2].metric("Строк с ошибками", len(rep.errors))
+    c[3].metric("Противоречий", len(rep.contradictions))
+    updated = display(rep.loaded_at)[:16] if rep.loaded_at else "—"
+    st.caption(f"Файл: {rep.source or '—'} · проверен {updated} · повторов пропущено: {rep.duplicates}")
+    if rep.errors:
+        st.warning("Строки, не прошедшие проверку, не загружены:")
+        st.dataframe(pd.DataFrame(rep.errors).rename(columns={"line": "Строка файла", "error": "Причина"}),
+                     hide_index=True, use_container_width=True)
+    if rep.contradictions:
+        st.info("Источники расходятся — агент показывает оба значения и передаёт вопрос эксперту:")
+        st.dataframe(pd.DataFrame([{"Модель": x["model"], "Параметр": x["param"],
+                                    "Значения": "; ".join(f"{v['value']} (с. {v['page']})" for v in x["values"])}
+                                   for x in rep.contradictions]), hide_index=True, use_container_width=True)
+    with st.container(border=True):
+        st.markdown("**Загрузить новую версию справочника**")
+        st.caption("Файл проверяется до замены: пропуски, единицы, числа, страницы, документы. Повторяющиеся строки "
+                   "не дублируются. Если ни одна строка не прошла проверку, действующий справочник остаётся.")
+        st.session_state.setdefault("spr_key", 0)
+        f = st.file_uploader("Справочник", type=["csv", "xlsx"], key=f"spr-{st.session_state.spr_key}",
+                             label_visibility="collapsed")
+        if f is not None:
+            try:
+                new = spravochnik.replace_file(f.name, f.getvalue())
+                log_action("spravochnik", ctx()["login"], f.name,
+                           f"значений: {new.values}; ошибок: {len(new.errors)}; противоречий: {len(new.contradictions)}")
+                st.session_state.spr_note = ("success", f"Загружено значений: {new.values}, моделей: {new.models}. "
+                                                        f"Ошибок: {len(new.errors)}, противоречий: {len(new.contradictions)}.")
+            except ValueError as e:
+                st.session_state.spr_note = ("error", str(e))
+            st.session_state.spr_key += 1
+            st.rerun()
+        if note := st.session_state.pop("spr_note", None):
+            getattr(st, note[0])(note[1])
+    if values:
+        df = pd.DataFrame([{"Модель": v.model, "Вид": v.kind, "Параметр": v.param, "Значение": v.shown(),
+                            "Документ": v.doc, "Страница": v.page} for v in values])
+        flt = st.text_input("Найти модель или параметр", key="spr-filter", placeholder="например, 4143 или полоса")
+        if flt:
+            df = df[df.apply(lambda r: flt.lower() in f"{r['Модель']} {r['Параметр']}".lower(), axis=1)]
+        st.dataframe(df, hide_index=True, use_container_width=True, height=360)
+        st.download_button("Скачать справочник (CSV)", spravochnik.PATH.read_bytes(), file_name="spravochnik.csv",
+                           icon=":material/download:", key="spr-dl")
+
+
+def expert_queue() -> None:
+    """Вопросы эксперту: противоречия между источниками. Агент не выбирает значение сам."""
+    items = experts.load()
+    open_items = [x for x in items if x["status"] == "открыт"]
+    st.caption("Когда источники расходятся, агент показывает оба значения, не делает вывода и передаёт вопрос "
+               "эксперту — владельцу документа или справочника. Решение эксперта фиксируется в журнале действий.")
+    c = st.columns(2)
+    c[0].metric("Открытых вопросов", len(open_items))
+    c[1].metric("Решено", len(items) - len(open_items))
+    if not items:
+        st.info("Вопросов эксперту пока нет.")
+        return
+    for it in sorted(items, key=lambda x: (x["status"] != "открыт", x["time"]), reverse=False):
+        with st.container(border=True):
+            details = it["details"] if isinstance(it["details"], str) else "; ".join(
+                f"{d.get('value')} — {d.get('doc')}, с. {d.get('page')}" for d in it["details"])
+            st.markdown(f"**{it['subject']}** · {it['kind']}  \n:gray[{display(it['time'])[:16]} · обращений: "
+                        f"{it.get('asked', 1)} · {it['status']}]")
+            st.caption(f"Значения: {details}")
+            if it.get("question"):
+                st.caption(f"Вопрос сотрудника: «{it['question']}»")
+            if it["status"] == "открыт":
+                note = st.text_input("Решение эксперта", key=f"exp-note-{it['id']}",
+                                     placeholder="например: верно 1 Гвыб/с, в таблице на с. 6 опечатка")
+                if st.button("Решено", key=f"exp-ok-{it['id']}", icon=":material/check:"):
+                    experts.resolve(it["id"], ctx()["login"], note)
+                    log_action("expert", ctx()["login"], it["subject"], note)
+                    st.rerun()
+            else:
+                st.caption(f"Решил {it.get('resolved_by') or '—'} {display(it.get('resolved_at', ''))[:16]}: "
+                           f"{it.get('note') or '—'}")
 
 
 def _report(path) -> dict | None:
@@ -303,8 +406,8 @@ def admin_page() -> None:
         st.error("Раздел доступен только администратору.")
         return
     st.markdown("### Администрирование")
-    tabs = st.tabs(["Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Качество",
-                    "Безопасность", "Система"])
+    tabs = st.tabs(["Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Справочник",
+                    "Вопросы эксперту", "Качество", "Безопасность", "Система"])
     with tabs[0]:
         journal()
     with tabs[1]:
@@ -314,8 +417,12 @@ def admin_page() -> None:
     with tabs[3]:
         docs()
     with tabs[4]:
-        quality()
+        reference()
     with tabs[5]:
-        security()
+        expert_queue()
     with tabs[6]:
+        quality()
+    with tabs[7]:
+        security()
+    with tabs[8]:
         system()

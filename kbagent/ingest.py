@@ -8,6 +8,7 @@
 пункта и страницы всегда остаются при фрагменте — они и есть ссылка в ответе.
 """
 import re
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -310,6 +311,55 @@ def load_catalog(raw_dir: Path) -> dict[str, dict]:
     return catalog
 
 
+def _date(value) -> str:
+    """«2026-03-01» из каталога (строка или дата YAML); пусто — не задано."""
+    return str(value or "")[:10]
+
+
+def not_yet_effective(info: dict) -> str:
+    """Дата вступления в силу, если она ещё не наступила («вступает в силу 01.12.2026»), иначе пусто."""
+    start = _date(info.get("effective_from"))
+    return start if start and start > time.strftime("%Y-%m-%d") else ""
+
+
+def expired_on(info: dict) -> str:
+    """Дата окончания действия, если она уже прошла («действует до 31 декабря 2025 года»), иначе пусто."""
+    end = _date(info.get("effective_to"))
+    return end if end and end < time.strftime("%Y-%m-%d") else ""
+
+
+def _ru(day: str) -> str:
+    return f"{day[8:10]}.{day[5:7]}.{day[:4]}" if len(day) == 10 else day
+
+
+_REGISTRY: dict = {}
+
+
+def registry_info(doc_id: str, raw_dir: Path | None = None) -> dict:
+    """Запись реестра (каталога) о документе; каталог перечитывается, только если файлы изменились."""
+    from .config import settings
+    raw_dir = raw_dir or settings.raw_dir
+    files = [raw_dir.parent / "sources.yaml", *raw_dir.glob("*/catalog.yaml")]
+    stamp = tuple((str(f), f.stat().st_mtime) for f in files if f.exists())
+    if _REGISTRY.get("stamp") != stamp:
+        _REGISTRY.update(stamp=stamp, catalog=load_catalog(raw_dir))
+    return _REGISTRY["catalog"].get(doc_id, {})
+
+
+def registry_suffix(doc_id: str, raw_dir: Path | None = None) -> str:
+    """Версия и срок действия документа для подписи ссылки: «ред. 2026, действует с 01.03.2026»;
+    у истёкшего — «срок действия истёк 31.12.2025». Каталог перечитывается, только если файлы изменились."""
+    info = registry_info(doc_id, raw_dir)
+    parts = []
+    if info.get("version"):
+        parts.append(f"ред. {info['version']}")
+    if expired_on(info):
+        parts.append(f"срок действия истёк {_ru(expired_on(info))}")
+    elif info.get("effective_from"):
+        parts.append(f"действует с {_ru(_date(info['effective_from']))}")
+    return ", ".join(parts)
+
+
 def is_draft_edition(info: dict) -> bool:
     """Загруженная новая редакция, которую ещё не утвердили (у документов из sources.yaml поля approved нет)."""
     return bool(info.get("replaces")) and not info.get("approved", True)
@@ -318,7 +368,8 @@ def is_draft_edition(info: dict) -> bool:
 def access_of(info: dict) -> str:
     if is_cancelled(info):
         return ARCHIVE
-    return DRAFT if is_draft_edition(info) else info.get("access", "all")
+    # проект новой редакции и документ, который ещё не вступил в силу, видит только администратор
+    return DRAFT if is_draft_edition(info) or not_yet_effective(info) else info.get("access", "all")
 
 
 def parse_document(path: Path, catalog: dict, stats: dict | None = None) -> list[Chunk]:

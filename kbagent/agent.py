@@ -8,7 +8,7 @@ from typing import Callable
 
 import yaml
 
-from . import demo_db, llm
+from . import demo_db, llm, raschety, spravochnik
 from .answer import answer_from_documents, source_label
 from .cards import build_cards, card_chunk, card_text
 from .config import settings
@@ -292,6 +292,23 @@ class Agent:
         self.index = index or Index.load(settings.index_dir)
         self._cards, self._cards_key = {}, None
         prune(settings.log_dir / "audit.jsonl")       # журнал вопросов — не дольше срока хранения
+        self._synced = ""
+        self._sync_registry()
+
+    def _sync_registry(self) -> None:
+        """Раз в день: доступ документов в индексе — по реестру. Документ, у которого наступила дата
+        вступления в силу, становится доступен ролям; до неё его видит только администратор."""
+        today = time.strftime("%Y-%m-%d")
+        if self._synced == today:
+            return
+        from .ingest import access_of, load_catalog
+        catalog = load_catalog(settings.raw_dir)
+        current = {c.doc_id: c.access for c in self.index.chunks}
+        for doc_id, access in current.items():
+            want = access_of(catalog[doc_id]) if doc_id in catalog else access
+            if want != access:
+                self.index.update_meta(doc_id, settings.index_dir, access=want)
+        self._synced = today
 
     # ---------- документы целиком ----------
 
@@ -341,6 +358,52 @@ class Agent:
         status = "answer" if chosen else "no_data"
         return AgentResult(question, role, "documents", status, "\n".join([head] + lines), sources=sources,
                            stats={"catalog": True})
+
+    def _clause_source(self, doc_id: str, clause: str, n: int) -> dict | None:
+        """Источник — фрагмент документа с этим пунктом (из подходящих — с самым узким диапазоном пунктов)."""
+        part = lambda c: tuple(int(x) for x in re.findall(r"\d+", c))  # noqa: E731
+        target, found = part(clause), []
+        for c in self.index.chunks:
+            if c.doc_id != doc_id or not c.clause:
+                continue
+            first, _, last = c.clause.partition("–")
+            lo, hi = part(first), part(last or first)
+            if len(lo) == len(hi) == len(target) and lo <= target <= hi:
+                found.append((len(c.text), c))
+        if not found:
+            return None
+        c = min(found, key=lambda x: x[0])[1]
+        return {"n": n, "label": source_label(Hit(c, 1.0, None, None)), "text": c.text, "doc_id": c.doc_id,
+                "doc_kind": c.doc_kind, "clause": c.clause, "page": c.page_start, "page_end": c.page_end,
+                "cited": True, "score": 1.0}
+
+    def answer_calculation(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
+        """«Партия из 250 резисторов: сколько осмотреть и сколько проверить?» — числа считает программа по
+        правилам из data/pravila_raschetov.yaml, у каждого — ссылка на пункт документа. Модель не вычисляет."""
+        results = [r for r in raschety.match(question) if self.cards.get(r.rule.doc, {}).get("access") in allowed]
+        if not results:
+            return None
+        sources, refs, lines = [], {}, []
+        for r in results:
+            key = (r.rule.doc, r.rule.clause)
+            if key not in refs:
+                src = self._clause_source(r.rule.doc, r.rule.clause, len(sources) + 1)
+                same = next((x for x in sources if src and (x["doc_id"], x["clause"]) == (src["doc_id"], src["clause"])),
+                            None)
+                if same is not None:                 # пункты 4.3 и 4.4 — в одном фрагменте: одна ссылка
+                    refs[key] = f" [{same['n']}]"
+                elif src is not None:
+                    sources.append(src)
+                    refs[key] = f" [{src['n']}]"
+            lines.append(f"- **{r.rule.title}: {r.value} шт.** — {r.explanation} (п. {r.rule.clause}){refs.get(key, '')}")
+        title = self.cards.get(results[0].rule.doc, {}).get("title", results[0].rule.doc)
+        note = "Числа посчитаны программой по правилам из пунктов документа, а не языковой моделью."
+        if any(not r.rule.agreed for r in results):
+            note += (" Способ округления в документе не указан — расчёт выполнен с округлением вверх; это правило "
+                     "нужно согласовать с владельцем документа.")
+        text = f"Расчёт по {title} для партии {results[0].quantity} шт.:\n" + "\n".join(lines) + f"\n\n{note}"
+        return AgentResult(question, role, "documents", "answer", text, sources=sources,
+                           stats={"calculation": [r.rule.id for r in results]})
 
     def answer_editions(self, question: str, role: str, allowed: set[str]) -> "AgentResult | None":
         """«Что изменилось в СТП ДП-02?» — изменённые, добавленные и исключённые пункты новой редакции
@@ -620,6 +683,7 @@ class Agent:
         step = on_step or (lambda _: None)
         if settings.db_path == demo_db.DB:
             demo_db.ensure_current()      # даты демо-базы — от сегодняшнего дня
+        self._sync_registry()
         allowed = settings.roles.get(role, {"all"})
 
         # «игнорируй инструкции и…», «ответь без документов, своими словами» — отвечаем на сам вопрос
@@ -645,6 +709,30 @@ class Agent:
         elif len(base.split()) > LONG_QUESTION_WORDS:
             step("Выделяю суть вопроса…")
             asked = self.shorten(base)
+        # параметры продукции («полоса АКИП-4115/2В», «подойдёт ли MAS830L для 15 А», «осциллограф от 150 МГц
+        # и 4 канала») — из справочника: точное значение, единица и источник; сравнение и подбор — программой
+        if route in ("auto", "spravochnik") and not RECORD_RE.search(asked):
+            query = spravochnik.understand(asked)
+            if query is not None:
+                step("Сверяю со справочником параметров…")
+                s = spravochnik.answer(query, allowed, question=asked, user=user, role=role)
+                if s is not None:
+                    result = AgentResult(question, role, "spravochnik", s.status, s.text, sources=s.sources,
+                                         columns=s.columns, rows=s.rows, labels=s.labels, stats=s.stats)
+                    result.asked = asked if asked != question else None
+                    result.seconds = round(time.time() - t0, 2)
+                    if log:
+                        self._log(result, user)
+                    return result
+        # «партия из 250 шт.: сколько осмотреть?» — расчёт по согласованным правилам программой
+        if route in ("auto", "documents"):
+            calc = self.answer_calculation(asked, role, allowed)
+            if calc is not None:
+                calc.asked = asked if asked != question else None
+                calc.seconds = round(time.time() - t0, 2)
+                if log:
+                    self._log(calc, user)
+                return calc
         # «Что делать?» или одно слово («Поверка») — встречный вопрос с вариантами, а не случайный ответ
         vague = route == "auto" and (VAGUE_RE.match(asked) or (len(asked.split()) == 1 and not RECORD_RE.search(asked)))
 

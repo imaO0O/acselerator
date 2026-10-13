@@ -11,6 +11,7 @@ from kbagent import auth
 from kbagent.database import column_label, display
 from kbagent.export import answer_docx
 from kbagent.preview import source_path
+from kbagent.ingest import expired_on, registry_info
 from kbagent.uploads import KIND_PENDING
 
 EXAMPLES = [
@@ -184,6 +185,13 @@ def render_answer(item: dict, i: int) -> None:
                 st.rerun()
 
     cited = [s for s in item.get("sources", []) if s["cited"]]
+    expired = {s["doc_id"]: expired_on(registry_info(s["doc_id"])) for s in cited}
+    expired = {d: day for d, day in expired.items() if day}
+    if expired:
+        names = "; ".join(f"«{registry_info(d).get('title', d)}» — до {day[8:10]}.{day[5:7]}.{day[:4]}"
+                          for d, day in expired.items())
+        st.warning(f"Срок действия документа истёк: {names}. Проверьте, какая редакция действует сейчас, "
+                   "и сообщите администратору базы знаний.", icon=":material/event_busy:")
     if any(s.get("doc_kind") == KIND_PENDING for s in cited):
         st.warning("Ответ опирается на документ, загруженный пользователем и ещё не утверждённый.",
                    icon=":material/pending:")

@@ -24,3 +24,8 @@ data/demo_db/dates.json
 
 # ключи API (только хэши) — выпускаются на месте установки
 data/api_keys.yaml
+
+# справочник параметров: отчёт о загрузке и предыдущая версия файла — производные
+data/spravochnik/import.json
+data/spravochnik/pribory.prev.csv
+data/spravochnik/upload.*
