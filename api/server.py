@@ -56,13 +56,14 @@ def client(x_api_key: str | None = Header(None, description="Ключ досту
 
 
 class Turn(BaseModel):
-    question: str
-    answer: str = ""
+    question: str = Field(..., max_length=1000)
+    answer: str = Field("", max_length=8000)
 
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=2, max_length=1000, examples=["Что делать при искрении оборудования?"])
-    history: list[Turn] = Field(default_factory=list, description="Предыдущие реплики диалога (до трёх)")
+    history: list[Turn] = Field(default_factory=list, max_length=50,
+                                description="Предыдущие реплики диалога; учитываются последние три")
     source: str = Field("auto", pattern="^(auto|documents|database)$", description="Где искать ответ")
 
 
@@ -93,9 +94,14 @@ def health() -> dict:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, who: dict = Depends(client)) -> AskResponse:
-    history = [{"question": t.question, "text": t.answer} for t in req.history[-3:]]
-    r = agent().ask(req.question, role=who["role"], route=req.source, history=history or None,
-                    user=f"api:{who['name']}")
+    # длинные ответы из истории обрезаются: модели поиска принимают ограниченный объём текста
+    history = [{"question": t.question[:500], "text": t.answer[:1500]} for t in req.history[-3:]]
+    try:
+        r = agent().ask(req.question, role=who["role"], route=req.source, history=history or None,
+                        user=f"api:{who['name']}")
+    except Exception as e:      # noqa: BLE001 — сбой модели или поиска: понятный ответ вместо «500»
+        log_action("api_error", f"api:{who['name']}", req.question[:120], type(e).__name__)
+        raise HTTPException(503, "Сервис ответов временно недоступен, повторите запрос позже") from e
     sources = [Source(n=s["n"], label=s["label"], doc_id=s["doc_id"], clause=s.get("clause"), page=s.get("page"))
                for s in r.sources if s["cited"]]
     table = {"columns": r.labels or r.columns, "rows": r.rows} if r.rows else None

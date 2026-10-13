@@ -64,6 +64,7 @@ class Settings:
     roles: dict = field(default_factory=lambda: {
         "Инженер производства": {"all", "production"},
         "Метролог": {"all", "production", "metrology"},
+        "Техпродажи и сервис": {"all"},
         "Администратор": {"all", "production", "metrology", "admin"},
     })
 

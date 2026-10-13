@@ -282,3 +282,83 @@ def test_registry_dates_control_access_and_labels(tmp_path):
     assert access_of(cat["soon"]) == DRAFT                       # не вступил в силу — только администратору
     assert registry_suffix("now", raw) == "ред. 2026, действует с 01.03.2026"
     assert registry_suffix("old", raw) == "срок действия истёк 31.12.2025"
+
+
+def test_api_rejects_oversized_history_and_hides_internal_errors(tmp_path, monkeypatch, tmp_settings):
+    from fastapi.testclient import TestClient
+
+    from api import server
+    monkeypatch.setattr(server, "KEYS_PATH", tmp_path / "keys.yaml")
+    (tmp_path / "keys.yaml").write_text(
+        f"keys:\n- name: t\n  role: Метролог\n  hash: {server.key_hash('kb_good')}\n", encoding="utf-8")
+    api, key = TestClient(server.app), {"X-API-Key": "kb_good"}
+    long = [{"question": "вопрос", "answer": "о" * 9000}]
+    assert api.post("/ask", json={"question": "тест вопроса", "history": long}, headers=key).status_code == 422
+    many = [{"question": "вопрос", "answer": "ответ"}] * 60
+    assert api.post("/ask", json={"question": "тест вопроса", "history": many}, headers=key).status_code == 422
+
+    class Broken:
+        def ask(self, *a, **k):
+            raise RuntimeError("сервер векторов: слишком длинный текст")
+    monkeypatch.setattr(server, "agent", lambda: Broken())
+    r = api.post("/ask", json={"question": "тест вопроса"}, headers=key)
+    assert r.status_code == 503 and "недоступен" in r.json()["detail"]
+
+
+def test_employee_can_send_any_answer_to_expert_and_see_the_decision(tmp_settings):
+    from kbagent import experts
+    first = experts.add("передал сотрудник", "Какая полоса у АКИП-4115/2В?", "Ответ агента: 200 МГц [1]",
+                        user="u1", role="Техпродажи и сервис", comment="в каталоге 150 МГц")
+    again = experts.add("передал сотрудник", "Какая полоса у АКИП-4115/2В?", "Ответ агента: 200 МГц [1]",
+                        user="u2", comment="клиент тоже спрашивает")
+    assert again["id"] == first["id"] and again["asked"] == 2 and "клиент" in again["comment"]
+    experts.resolve(first["id"], "Эксперт", "верно 200 МГц, каталог устарел")
+    done = experts.get(first["id"])
+    assert done["status"] == "решён" and done["note"].startswith("верно")
+    assert experts.add("передал сотрудник", "Какая полоса у АКИП-4115/2В?", "…")["id"] != first["id"]
+
+
+def test_upload_converts_images_and_excel_tables(monkeypatch):
+    import datetime
+    import io
+
+    import pymupdf
+    import pytest
+    from docx import Document
+    from openpyxl import Workbook
+
+    from kbagent import uploads
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 800, 1100), 0)
+    pix.clear_with(255)
+    monkeypatch.setattr(uploads, "ocr_available", lambda: True)
+    ext, data, notes = uploads.convert_upload("Скан приказа.JPG", pix.tobytes("jpg"))
+    page = pymupdf.open("pdf", data)[0]
+    assert ext == ".pdf" and notes == {"image": True} and page.get_images() and round(page.rect.width) == 595
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Прайс"
+    ws.append(["Модель", "Цена, руб", "Дата"])
+    ws.append(["АКИП-4115/1В", 45000.5, datetime.date(2026, 10, 1)])
+    ws.append([None, None, None])
+    ws.append(["MAS830L", 1200, None])
+    buf = io.BytesIO()
+    wb.save(buf)
+    ext, data, notes = uploads.convert_upload("Прайс_лист.xlsx", buf.getvalue())
+    lines = [p.text for p in Document(io.BytesIO(data)).paragraphs]
+    assert ext == ".docx" and notes == {"table_rows": 2}
+    assert "Лист «Прайс», строка 2. Модель: АКИП-4115/1В; Цена, руб: 45000,5; Дата: 01.10.2026" in lines
+    assert "Лист «Прайс», строка 4. Модель: MAS830L; Цена, руб: 1200" in lines
+
+    monkeypatch.setattr(uploads, "ocr_available", lambda: False)
+    with pytest.raises(ValueError, match="распознавание"):
+        uploads.convert_upload("фото.png", pix.tobytes("png"))
+    with pytest.raises(ValueError, match="Excel"):
+        uploads.convert_upload("заметки.txt", b"text")
+
+
+def test_every_demo_user_has_a_known_role():
+    from kbagent.config import settings
+    from scripts.make_users import DEMO_USERS
+    assert {role for _, _, role, _ in DEMO_USERS} <= set(settings.roles)
+    assert "Техпродажи и сервис" in settings.roles and list(settings.roles)[-1] == "Администратор"

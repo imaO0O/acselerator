@@ -28,20 +28,28 @@ def _save(items: list[dict]) -> None:
 
 
 def add(kind: str, subject: str, details: list | str, question: str = "", user: str | None = None,
-        role: str | None = None) -> dict:
+        role: str | None = None, comment: str = "") -> dict:
     """Новый вопрос эксперту; если по этой теме уже есть открытый — к нему добавляется ещё одно обращение."""
     items = load()
     for it in items:
         if it["subject"] == subject and it["status"] == "открыт":
             it["asked"] = it.get("asked", 1) + 1
             it["last"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if comment:
+                it["comment"] = "; ".join(x for x in (it.get("comment"), comment) if x)
             _save(items)
             return it
     it = {"id": uuid.uuid4().hex[:8], "time": time.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, "subject": subject,
           "details": details, "question": question, "user": user, "role": role, "status": "открыт", "asked": 1}
+    if comment:
+        it["comment"] = comment
     items.append(it)
     _save(items)
     return it
+
+
+def get(item_id: str) -> dict | None:
+    return next((it for it in load() if it["id"] == item_id), None)
 
 
 def resolve(item_id: str, user: str | None, note: str = "") -> None:

@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 from kbagent import auth, llm  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
-ADMIN, ENGINEER, METROLOGIST = "Администратор", "Инженер производства", "Метролог"
+ADMIN, ENGINEER, METROLOGIST, SALES = "Администратор", "Инженер производства", "Метролог", "Техпродажи и сервис"
 SHOW_DOCS = ("RI-DP-05_selektivnaya_pajka", "Prikaz_17_skan")
 SLOW = 5.0     # секунд: дольше — предупреждение
 
@@ -39,13 +39,17 @@ SCENARIO = [
     (ADMIN, "Какой срок?", None, "clarify", []),
     (ADMIN, "Ты работаешь без интернета?", None, "info", ["интернет"]),
     (ADMIN, "Что изменилось в СТП ДП-02?", None, "answer", ["Изменено пунктов", "2211"]),
-    # сценарий по карточке партнёра: технический специалист продаж и сервиса
-    (ENGINEER, "Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?", None,
+    # сценарий по карточке партнёра: запросы клиентов о приборах — технические продажи и сервис
+    (SALES, "Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?", None,
      "answer", ["АКИП-4143", "Подходят: 6"]),
-    (ENGINEER, "Можно ли мультиметром MAS830L измерить ток 15 А?", None, "answer", ["не подходит", "10 А"]),
-    (ENGINEER, "Какая частота дискретизации у АКИП-4115/1В?", None, "answer", ["Источники расходятся"]),
+    (SALES, "Можно ли мультиметром MAS830L измерить ток 15 А?", None, "answer", ["не подходит", "10 А"]),
+    (SALES, "Какая частота дискретизации у АКИП-4115/1В?", None, "answer", ["Источники расходятся"]),
+    (SALES, "Чем отличаются АКИП-4122/1(V) и АКИП-4122/10(V)?", None, "answer", ["Различаются"]),
+    (SALES, "Подойдёт ли паяльная станция SBK936B для пайки при 450 °C?", None, "answer", ["подходит", "200–480"]),
+    (SALES, "У каких средств измерений истёк срок поверки?", None, "answer", ["СИ-0012"]),
     (ENGINEER, "Пришла партия из 250 резисторов. Сколько штук осмотреть внешне и сколько проверить по "
                "электрическим параметрам?", None, "answer", ["25 шт", "13 шт"]),
+    (ENGINEER, "На какой срок выдаётся наряд-допуск?", None, "answer", ["15 календарных дней"]),
     (ENGINEER, "За сколько дней до истечения срока поверки метролог уведомляет подразделение?", None, "refuse", []),
     (METROLOGIST, "За сколько дней до истечения срока поверки метролог уведомляет подразделение?", None,
      "answer", ["30"]),
@@ -67,7 +71,7 @@ def ok(result, expect: str, must: list[str]) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--clean", action="store_true", help="очистить диалоги демо-учёток")
+    ap.add_argument("--clean", action="store_true", help="очистить диалоги демо-учёток и очередь вопросов эксперту")
     ap.add_argument("--reset-show", action="store_true", help="убрать загруженные документы для показа")
     args = ap.parse_args()
     problems = []
@@ -142,11 +146,16 @@ def main() -> int:
 
     if args.clean:
         print("5. Диалоги демо-учёток")
-        for login in ("admin", "inzhener", "metrolog"):
+        for login in ("admin", "inzhener", "metrolog", "prodazhi"):
             convs = auth.list_conversations(login)
             for c in convs:
                 auth.delete_conversation(login, c["id"])
             print(f"   ✓ {login}: удалено диалогов — {len(convs)}")
+        # очередь эксперта — с чистого листа: на показе её наполняют сцена П3 и кнопка «Эксперту»
+        from kbagent import experts
+        removed = len(experts.load())
+        experts._save([])
+        print(f"   ✓ вопросы эксперту: удалено — {removed}")
 
     times.sort()
     print(f"\nВремя ответа: медиана {times[len(times) // 2]:.1f} с, максимум {times[-1]:.1f} с")

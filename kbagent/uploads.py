@@ -6,17 +6,24 @@
 Если документ загружен как новая редакция другого («заменяет»), до утверждения это проект: его видит
 только администратор, сотрудники получают ответы по действующей редакции. После утверждения старая
 редакция отменяется и перестаёт участвовать в поиске; при удалении новой — возвращается.
+
+Форматы: PDF (и сканы — с распознаванием текста), Word; картинка (скан или фото страницы) превращается в PDF
+и распознаётся; таблица Excel — в документ Word, где каждая строка — абзац «Строка N. Столбец: значение; …»,
+чтобы ссылка в ответе вела к листу и строке.
 """
+import datetime as dt
 import hashlib
+import io
 import re
 import time
+from itertools import zip_longest
 from pathlib import Path
 
 import yaml
 
 from .actions import log_action
 from .config import settings
-from .ingest import ARCHIVE, access_of, expired_on, is_draft_edition, load_catalog, not_yet_effective
+from .ingest import ARCHIVE, access_of, expired_on, is_draft_edition, load_catalog, not_yet_effective, ocr_available
 from .text import tokenize
 from .store import Index
 
@@ -25,6 +32,83 @@ CATALOG = UPLOAD_DIR / "catalog.yaml"
 
 KIND_PENDING = "Загруженный документ"
 KIND_APPROVED = "Загруженный документ (утверждён)"
+
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+TABLE_EXT = (".xlsx",)
+UPLOAD_TYPES = ["pdf", "docx", "xlsx"] + [e[1:] for e in IMAGE_EXT]
+MAX_TABLE_ROWS = 5000
+
+
+def _cell(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, dt.datetime):
+        return v.strftime("%d.%m.%Y") if v.time() == dt.time() else v.strftime("%d.%m.%Y %H:%M")
+    if isinstance(v, dt.date):
+        return v.strftime("%d.%m.%Y")
+    if isinstance(v, float):
+        return f"{v:.10g}".replace(".", ",")
+    return re.sub(r"\s+", " ", str(v)).strip()
+
+
+def image_to_pdf(data: bytes) -> bytes:
+    """Скан или фото страницы → одностраничный PDF шириной A4: дальше распознавание, как у скана в PDF."""
+    import pymupdf
+    pix = pymupdf.Pixmap(data)
+    if pix.alpha:
+        pix = pymupdf.Pixmap(pix, 0)
+    width = 595.0
+    doc = pymupdf.open()
+    page = doc.new_page(width=width, height=width * pix.height / pix.width)
+    page.insert_image(page.rect, pixmap=pix)
+    return doc.tobytes()
+
+
+def table_to_docx(data: bytes, title: str) -> tuple[bytes, int]:
+    """Таблица Excel → документ Word: по листам, каждая строка — абзац «Строка N. Заголовок: значение; …».
+    Первая непустая строка листа — заголовки столбцов. Возвращает файл и число строк данных."""
+    from docx import Document
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    doc = Document()
+    doc.add_paragraph(title)
+    total = 0
+    for ws in wb.worksheets:
+        header = None
+        for n, row in enumerate(ws.iter_rows(values_only=True), 1):
+            cells = [_cell(v) for v in row]
+            if not any(cells):
+                continue
+            if header is None:
+                header = cells
+                doc.add_paragraph(f"Лист «{ws.title}»")
+                continue
+            parts = [f"{h or f'столбец {k + 1}'}: {v}" for k, (h, v) in enumerate(zip_longest(header, cells)) if v]
+            doc.add_paragraph(f"Лист «{ws.title}», строка {n}. " + "; ".join(parts))
+            total += 1
+            if total >= MAX_TABLE_ROWS:
+                break
+        if total >= MAX_TABLE_ROWS:
+            break
+    wb.close()
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue(), total
+
+
+def convert_upload(filename: str, data: bytes) -> tuple[str, bytes, dict]:
+    """Расширение и содержимое файла, который пойдёт в базу знаний, и заметки о преобразовании."""
+    ext = Path(filename).suffix.lower()
+    if ext in IMAGE_EXT:
+        if not ocr_available():
+            raise ValueError("для картинок нужно распознавание текста: python scripts/setup.py --ocr")
+        return ".pdf", image_to_pdf(data), {"image": True}
+    if ext in TABLE_EXT:
+        docx, rows = table_to_docx(data, Path(filename).stem.replace("_", " "))
+        return ".docx", docx, {"table_rows": rows}
+    if ext not in (".pdf", ".docx"):
+        raise ValueError("поддерживаются PDF, Word, Excel (XLSX) и картинки (PNG, JPG, TIFF, BMP)")
+    return ext, data, {}
 
 
 def _read_catalog() -> list[dict]:
@@ -105,9 +189,7 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
                owner: str = "") -> dict:
     """Сохраняет файл, добавляет его в каталог и индекс.
     Возвращает id, title, chunks, replaced_same (перезаписан одноимённый), ocr_pages, scanned_pages."""
-    ext = Path(filename).suffix.lower()
-    if ext not in (".pdf", ".docx"):
-        raise ValueError("поддерживаются PDF и DOCX")
+    ext, data, converted = convert_upload(filename, data)
     doc_id = doc_id_for(filename)
     title = Path(filename).stem.replace("_", " ")
     docs = _read_catalog()
@@ -137,7 +219,7 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
     log_action("upload", user, title, f"фрагментов: {len(chunks)}; доступ: {access}"
                + (f"; заменяет: {replaces}" if replaces else "") + (f"; распознано страниц: {stats['ocr_pages']}"
                                                                      if stats.get("ocr_pages") else ""))
-    return {"id": doc_id, "title": title, "chunks": len(chunks), "replaced_same": replaced_same, **stats}
+    return {"id": doc_id, "title": title, "chunks": len(chunks), "replaced_same": replaced_same, **converted, **stats}
 
 
 def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:

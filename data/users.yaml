@@ -3,12 +3,16 @@ users:
 - login: inzhener
   name: Инженер производства (демо)
   role: Инженер производства
-  password_hash: pbkdf2_sha256$200000$78ff1b051886e651d6487ecf1c513df1$c325f3f74e32d6309dcd1fdf204e378db9ba7958823e4b59ac79e2b1957bec05
+  password_hash: pbkdf2_sha256$200000$28ea18d47fdc2ad03e9fc0e2077a3555$e30dbc3fe21a4f3232e124a80eaff897d7e262cea49b7bb4620180923738dae1
 - login: metrolog
   name: Метролог (демо)
   role: Метролог
-  password_hash: pbkdf2_sha256$200000$e1e2f8d082bab80292e7858159357a40$5f92dc03f380fde2830617cacfaeb795b2abc5c4a5d0371d435df3a7a9fa8caf
+  password_hash: pbkdf2_sha256$200000$15610772c819931bf550807d90e27f48$314c251dad64e07eabe352f9b3a6e1cca3482b217716e7bfbdabd68f086651d8
+- login: prodazhi
+  name: Техпродажи и сервис (демо)
+  role: Техпродажи и сервис
+  password_hash: pbkdf2_sha256$200000$4acfcae1425a022745bc6ca6aa9d1fd8$dfd7c739732403d452ae522acb7615e9a181cd169f7c39efca46fcac0fd4f6d0
 - login: admin
   name: Администратор (демо)
   role: Администратор
-  password_hash: pbkdf2_sha256$200000$18dad75ba101a668e5469ae618ee7a70$abb96ee40f79655158896295d16352ce4afc354fd1fec42e2adfe8780474bd64
+  password_hash: pbkdf2_sha256$200000$44239e8c8846e64440796691544d4dec$41180b9f6ce1cf68ccc4992a276f9d52a960a1f02500d71a2f166ad49705fb32

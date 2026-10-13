@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
-from kbagent import auth
+from kbagent import auth, experts
 from kbagent.database import column_label, display
 from kbagent.actions import log_action
 from kbagent.export import answer_docx, draft_docx, draft_text
@@ -15,14 +15,34 @@ from kbagent.preview import source_path
 from kbagent.ingest import expired_on, registry_info
 from kbagent.uploads import KIND_PENDING
 
-EXAMPLES = [
-    "Что делать при искрении оборудования?",
-    "На какой срок выдаётся наряд-допуск?",
-    "Можно ли выдать в производство партию П-2609-04?",
-    "У каких средств измерений истёк срок поверки?",
-    "Что изменилось в новой редакции СТП ДП-02?",
+# примеры на пустом экране — по аудитории: запросы клиентов о приборах, производство, метрология
+CLIENT_EXAMPLES = [
+    "Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?",
+    "Можно ли мультиметром MAS830L измерить ток 15 А?",
+    "Подойдёт ли паяльная станция SBK936B для пайки при 450 °C?",
+    "Чем отличаются АКИП-4122/1(V) и АКИП-4122/10(V)?",
+    "Какая частота дискретизации у АКИП-4115/1В?",
     "Сколько стоит поверка одного осциллографа?",
 ]
+EXAMPLES = {
+    "Инженер производства": [
+        "Что делать при искрении оборудования?",
+        "Пришла партия из 250 резисторов. Сколько штук осмотреть внешне и сколько проверить по электрическим "
+        "параметрам?",
+        "Можно ли выдать в производство партию П-2609-04?",
+        "Что изменилось в новой редакции СТП ДП-02?",
+        "Можно ли мультиметром MAS830L измерить ток 15 А?",
+        "На какой срок выдаётся наряд-допуск?",
+    ],
+    "Метролог": [
+        "У каких средств измерений истёк срок поверки?",
+        "Какая частота дискретизации у АКИП-4115/1В?",
+        "Какая полоса пропускания у АКИП-4115/2В?",
+        "Что делать при искрении оборудования?",
+        "Сколько стоит поверка одного осциллографа?",
+        "Что изменилось в новой редакции СТП ДП-02?",
+    ],
+}
 ROUTES = {"Автоматически": "auto", "Только документы": "documents", "Только учётная база": "database"}
 
 CHAT_CSS = """
@@ -105,11 +125,15 @@ def _debug() -> bool:
 # ---------- ответ ----------
 
 def _short(label: str, limit: int = 95) -> str:
+    """Длинное название документа сокращается, а пункт, страница, версия и срок действия остаются."""
     if len(label) <= limit:
         return label
-    title, _, rest = label.partition(", п. ") if ", п. " in label else label.partition(", стр. ")
-    keep = limit - len(rest) - 6
-    return f"{title[:max(keep, 30)].rstrip()}…" + (f", {'п. ' if ', п. ' in label else 'стр. '}{rest}" if rest else "")
+    cut = min((label.find(m) for m in (", п. ", ", стр. ", ", с. ", " · ") if m in label), default=-1)
+    if cut < 0:
+        return label[:limit - 1].rstrip() + "…"
+    title, rest = label[:cut], label[cut:]
+    keep = limit - len(rest) - 1
+    return f"{title[:max(keep, 30)].rstrip()}…{rest}"
 
 
 @st.dialog("Источник", width="large")
@@ -180,6 +204,36 @@ def draft_dialog(i: int, uid: str) -> None:
                        file_name=f"chernovik-{i + 1}.docx", type="primary", icon=":material/task_alt:",
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                        on_click=_approve_draft, args=(i, key), key=f"draft-ok-{uid}")
+
+
+def _send_expert(i: int, key: str) -> None:
+    item = _conv()["items"][i]
+    comment = (st.session_state.get(key) or "").strip()
+    cited = [s for s in item.get("sources", []) if s.get("cited")]
+    answer = re.sub(r"\s+", " ", item["text"].replace("**", "")).strip()
+    details = f"Ответ агента: {answer[:700]}{'…' if len(answer) > 700 else ''}" + (
+        " Источники: " + "; ".join(f"[{s['n']}] {s['label']}" for s in cited) if cited else " Источников нет.")
+    it = experts.add("передал сотрудник", item.get("asked") or item["question"], details, item["question"],
+                     ctx()["login"], item["role"], comment)
+    if it["id"] not in item.setdefault("expert_ids", []):
+        item["expert_ids"].append(it["id"])
+    log_action("expert_sent", ctx()["login"], item["question"][:120], comment[:200])
+    _save()
+
+
+@st.dialog("Передать эксперту")
+def expert_dialog(i: int, uid: str) -> None:
+    """Сотрудник сомневается в ответе — вопрос, ответ агента и источники уходят в очередь эксперта.
+    Решение эксперта появится под ответом в чате."""
+    st.caption("Вопрос, ответ агента и источники попадут в очередь «Вопросы эксперту» (страница «Администрирование»). "
+               "Решение эксперта появится под этим ответом.")
+    key = f"exp-{uid}"
+    st.text_area("Что вызывает сомнение (необязательно)", key=key, height=110,
+                 placeholder="Например: в руководстве и в справочнике разные значения; клиент спрашивает "
+                             "о модификации, которой нет в документах")
+    if st.button("Передать", type="primary", icon=":material/forward_to_inbox:", key=f"exp-ok-{uid}"):
+        _send_expert(i, key)
+        st.rerun()
 
 
 def _on_comment(i: int, key: str) -> None:
@@ -259,7 +313,7 @@ def render_answer(item: dict, i: int) -> None:
         if hints:
             st.caption("Возможно, поможет: " + "; ".join(_short(s["label"], 70) for s in hints[:3]))
 
-    left, mid, draft, right = st.columns([4, 2, 2, 2], vertical_alignment="center")
+    left, mid, draft, expert, right = st.columns([3, 2, 2, 2, 2], vertical_alignment="center")
     seconds = f"{item['seconds']:.1f}".replace(".", ",")
     left.caption(ROUTE_LABELS.get(item["route"], "") + ("" if item["status"] == "info" else f" · {seconds} с"))
     with mid:
@@ -272,8 +326,19 @@ def render_answer(item: dict, i: int) -> None:
                                                    type="tertiary", help="Черновик ответа клиенту или коллеге: "
                                                    "правка текста и утверждение сотрудником"):
         draft_dialog(i, uid)
+    if item["status"] not in ("error", "info") and expert.button(
+            "Эксперту", key=f"xp-{uid}", icon=":material/support_agent:", type="tertiary",
+            help="Сомневаетесь в ответе или источники расходятся — передать вопрос эксперту"):
+        expert_dialog(i, uid)
     if item.get("draft_approved"):
         st.caption(f"Черновик утверждён: {item['draft_approved']['by']}, {item['draft_approved']['at']}")
+    for eid in item.get("expert_ids", []):
+        it = experts.get(eid)
+        if it and it["status"] == "решён":
+            st.success(f"**Ответ эксперта** ({it.get('resolved_by') or '—'}, {display(it.get('resolved_at', ''))[:16]}): "
+                       f"{it.get('note') or 'вопрос решён'}", icon=":material/verified:")
+        elif it:
+            st.caption(f"Вопрос передан эксперту: {it['subject']} — решение появится здесь")
     if item["status"] != "info":
         right.download_button("В Word", data=answer_docx(item, APP_NAME, ctx()["name"]), file_name=f"otvet-{i + 1}.docx",
                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -289,12 +354,13 @@ def render_answer(item: dict, i: int) -> None:
 def _hero() -> None:
     st.image(LOGO, width=52)
     st.markdown(f"### {APP_NAME}")
-    st.markdown("Отвечаю по регламентам, инструкциям, ГОСТам и данным учёта предприятия — со ссылкой "
-                "на документ, пункт и страницу. Если ответа в источниках нет, так и скажу.")
+    st.markdown("Отвечаю по документации, справочнику параметров продукции и данным учёта — со ссылкой "
+                "на документ, пункт и страницу. Подбираю приборы по требованиям клиента и готовлю черновик ответа, "
+                "который утверждаете вы. Если ответа в источниках нет, так и скажу.")
     st.caption("Приложите к сообщению документ Word (скрепка в поле ввода) — проверю оформление по ГОСТ Р 7.0.97.")
     st.caption("Например:")
     cols = st.columns(2)
-    for k, q in enumerate(EXAMPLES):
+    for k, q in enumerate(EXAMPLES.get(ctx()["role"], CLIENT_EXAMPLES)):
         if cols[k % 2].button(q, key=f"ex-{k}", use_container_width=True):
             st.session_state.pending = q
             st.rerun()
@@ -308,7 +374,7 @@ def chat_page() -> None:
     conv = _conv()
     items = conv["items"]
 
-    sent = st.chat_input("Спросите о регламентах, инструкциях или данных учёта — или приложите документ Word "
+    sent = st.chat_input("Спросите о продукции, документах или данных учёта — или приложите документ Word "
                          "для нормоконтроля", accept_file=True, file_type=["docx"])
     attached = sent.files[0] if sent and sent.files else None
     question = (sent.text if sent else None) or st.session_state.pop("pending", None)
@@ -348,6 +414,7 @@ def chat_page() -> None:
         item = {"question": question, "asked": r.asked, "role": ctx()["role"], "route": r.route,
                 "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,
                 "labels": r.labels, "rows": r.rows, "seconds": r.seconds, "options": r.options,
+                "expert_ids": list(r.stats.get("expert_ids", [])),
                 "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
         items.append(item)
         _save()

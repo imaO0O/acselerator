@@ -348,7 +348,7 @@ def registry_info(doc_id: str, raw_dir: Path | None = None) -> dict:
 
 def registry_suffix(doc_id: str, raw_dir: Path | None = None) -> str:
     """Версия и срок действия документа для подписи ссылки: «ред. 2026, действует с 01.03.2026»;
-    у истёкшего — «срок действия истёк 31.12.2025». Каталог перечитывается, только если файлы изменились."""
+    у истёкшего — «срок действия истёк 31.12.2025»; ничего не известно — «версия не указана». Каталог перечитывается, только если файлы изменились."""
     info = registry_info(doc_id, raw_dir)
     parts = []
     if info.get("version"):
@@ -357,6 +357,8 @@ def registry_suffix(doc_id: str, raw_dir: Path | None = None) -> str:
         parts.append(f"срок действия истёк {_ru(expired_on(info))}")
     elif info.get("effective_from"):
         parts.append(f"действует с {_ru(_date(info['effective_from']))}")
+    if info and not parts:
+        parts.append("версия не указана")     # реестр неполон — пусть это видно в ссылке, а не скрыто
     return ", ".join(parts)
 
 

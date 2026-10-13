@@ -231,6 +231,11 @@ def draw_architecture(slide):
         tail.set("w", "med")
         tail.set("len", "med")
 
+    def line(x1, y1, x2, y2):
+        c = sh.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
+        c.line.color.rgb = PURPLE
+        c.line.width = Pt(1.5)
+
     def badge(x, y, n):
         s = sh.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(0.3), Inches(0.3))
         s.name = f"Защита {n}"
@@ -252,7 +257,7 @@ def draw_architecture(slide):
         textbox(slide, x, y, w, 0.22, [text], size=10, color=MUTED).text_frame.paragraphs[0].runs[0].font.bold = bold
 
     textbox(slide, 0.62, 1.45, 10.9, 0.35,
-            ["Отвечает только по документам и учётной базе предприятия — со ссылкой на источник и без интернета"],
+            ["Только по документам, справочнику параметров и учёту — со ссылкой на источник, без интернета"],
             size=15, name="Подзаголовок")
 
     Y2, H2 = 3.42, 1.0
@@ -263,7 +268,7 @@ def draw_architecture(slide):
         xs.append(xs[-1] + w + gap)
     lane = [
         ("Вопрос", "сотрудника", WHITE, PURPLE, TEXT),
-        ("Где искать?", "GigaChat выбирает: документы или база", WHITE, PURPLE, TEXT),
+        ("Где искать?", "документы, справочник или учёт", WHITE, PURPLE, TEXT),
         ("Гибридный поиск", "по словам (BM25) и по смыслу (bge-m3)", WHITE, PURPLE, TEXT),
         ("Оценка релевантности", "переранжировщик bge-reranker-v2-m3", WHITE, PURPLE, TEXT),
         ("GigaChat 3.1 Lightning", "отвечает только по найденным фрагментам", PURPLE, None, WHITE),
@@ -282,7 +287,7 @@ def draw_architecture(slide):
 
     Y1, H1 = 2.22, 0.78
     sx, sw = xs[2], widths[2]
-    for x, w, t, s in [(0.5, 1.2, "PDF, DOCX", "регламенты, ГОСТы"),
+    for x, w, t, s in [(0.5, 1.2, "Документы", "PDF, Word, Excel, сканы"),
                        (1.88, sx - 0.18 - 1.88, "Разбор на пункты", "номер пункта и страницы"),
                        (sx, sw, "Индекс", "слова и смысловые векторы")]:
         box(x, Y1, w, H1, t, s, fill_color=LAV, border=None, name=f"Индексация: {t}")
@@ -315,20 +320,30 @@ def draw_architecture(slide):
 
     Y3, H3 = 4.88, 0.8
     rx, rw = xs[1], widths[1]
-    box(rx, Y3, 2.0, H3, "GigaChat → SQL", "только SELECT, только чтение", name="Учёт: SQL")
-    box(rx + 2.2, Y3, 1.7, H3, "Учётная база", "1С · ERP · MES", fill_color=LAV2, border=None,
+    box(rx, Y3, 1.8, H3, "GigaChat → SQL", "только SELECT, только чтение", name="Учёт: SQL")
+    box(rx + 2.0, Y3, 1.45, H3, "Учётная база", "1С · ERP · MES", fill_color=LAV2, border=None,
         shape=MSO_SHAPE.CAN, name="Учёт: база")
-    box(rx + 4.1, Y3, 2.3, H3, "Ответ + таблица записей", "запрос — у администратора",
+    box(rx + 3.65, Y3, 2.05, H3, "Ответ + таблица", "запрос — у администратора",
         fill_color=DEEP, border=None, fg=WHITE, name="Учёт: ответ")
     arrow(rx + rw / 2, Y2 + H2, rx + rw / 2, Y3)
-    arrow(rx + 2.0, Y3 + H3 / 2, rx + 2.2, Y3 + H3 / 2)
-    arrow(rx + 3.9, Y3 + H3 / 2, rx + 4.1, Y3 + H3 / 2)
-    caption(rx + rw / 2 + 0.12, Y2 + H2 + 0.03, 1.6, "вопрос по учёту", bold=False)
+    arrow(rx + 1.8, Y3 + H3 / 2, rx + 2.0, Y3 + H3 / 2)
+    arrow(rx + 3.45, Y3 + H3 / 2, rx + 3.65, Y3 + H3 / 2)
+    caption(rx - 0.02, Y2 + H2 + 0.03, rw / 2 - 0.1, "по учёту", bold=False)
     jx, jw = xs[6], widths[6]
     box(jx, Y3, jw, H3, "Журнал запросов", "кто, что спросил, что получил", fill_color=LAV, border=None,
         name="Журнал")
     arrow(jx + jw / 2, Y2 + H2, jx + jw / 2, Y3)
-    arrow(rx + 6.4, Y3 + H3 / 2, jx, Y3 + H3 / 2)
+    # справочник параметров: значение, единица и источник; подбор, сравнение и расчёт — программой
+    px = rx + 5.95
+    pw = jx - 0.25 - px
+    box(px, Y3, pw, H3, "Справочник параметров", "значение · единица · источник; подбор и расчёт — программой, "
+        "без модели", fill_color=WHITE, border=ORANGE, name="Справочник")
+    turn = Y3 - 0.13
+    line(rx + rw - 0.25, Y2 + H2, rx + rw - 0.25, turn)
+    line(rx + rw - 0.25, turn, px + pw / 2, turn)
+    arrow(px + pw / 2, turn, px + pw / 2, Y3)
+    caption(px + 0.05, turn - 0.25, pw, "вопрос о параметрах продукции", bold=False)
+    arrow(px + pw, Y3 + H3 / 2, jx, Y3 + H3 / 2)
 
     YF, HF = 6.12, 0.82
     facts = [("Отечественная модель", "GigaChat 3.1 Lightning, MIT, без иностранных весов"),
@@ -345,7 +360,9 @@ def draw_architecture(slide):
                  "только найденные фрагменты. Поэтому у каждого ответа есть источник, новые документы подключаются "
                  "за минуту, а права доступа соблюдаются. Четыре уровня защиты от выдумок отмечены оранжевыми "
                  "номерами; четвёртый — проверка, что ответ относится к тому же предмету, а не к похожему. "
-                 "Вопросы по учёту агент переводит в SQL-запрос только на чтение.")
+                 "Вопросы по учёту агент переводит в SQL-запрос только на чтение. Вопросы о параметрах продукции "
+                 "(подбор по требованиям клиента, сравнение моделей, расчёты) решает программа по справочнику: "
+                 "точное значение, единица и источник; языковая модель чисел не считает.")
 
 
 # ---------------------------------------------------------------- слайды

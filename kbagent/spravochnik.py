@@ -577,16 +577,19 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
             shown = {by[(m, p)][0].shown() if by.get((m, p)) else "нет данных" for m in models}
             (same if len(shown) == 1 and "нет данных" not in shown else diff).append(p.lower())
         lines.append("\nРазличаются: " + (", ".join(diff) or "—") + ". Совпадают: " + (", ".join(same) or "—") + ".")
+    expert_ids = []
     if experts:
         lines.append("\n**Источники расходятся** — вывод не делаю, вопрос передан эксперту:")
         unique = {(m, p): items for m, p, items in experts}
         for (model, param), items in unique.items():
             lines.append(f"- {model}, {param.lower()}: " + "; ".join(f"{v.shown()} (с. {v.page}) {ref(v)}" for v in items))
             from .experts import add as to_expert
-            to_expert("противоречие в справочнике", f"{model} — {param}",
-                      [{"value": v.shown(), "doc": v.doc, "page": v.page} for v in items], question, user, role)
+            expert_ids.append(to_expert("противоречие в справочнике", f"{model} — {param}",
+                                        [{"value": v.shown(), "doc": v.doc, "page": v.page} for v in items],
+                                        question, user, role)["id"])
     note = ("Значения — из справочника параметров, сравнение с требованием выполнено программой."
             if q.reqs else "Значения — из справочника параметров, у каждого — ссылка на страницу руководства.")
     text = head + "\n" + "\n".join(lines) + f"\n\n{note} Это черновик — проверьте его перед отправкой клиенту."
     return SprAnswer(status, text, sources, ["model", "param", "value"], rows, ["Модель", "Параметр", "Значение"],
-                     stats={"spravochnik": True, "models": len(models), "contradictions": len(experts)})
+                     stats={"spravochnik": True, "models": len(models), "contradictions": len(experts),
+                            "expert_ids": expert_ids})

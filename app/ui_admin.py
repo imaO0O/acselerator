@@ -14,8 +14,9 @@ from kbagent.actions import ACTIONS, load_actions
 from kbagent.gaps import find_gaps
 from kbagent.editions import compare
 from kbagent.database import display
-from kbagent.ingest import ocr_available
-from kbagent.uploads import add_upload, approve_upload, documents, list_uploads, remove_upload, similar_documents
+from kbagent.ingest import ocr_available, registry_info
+from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
+                             similar_documents)
 from kbagent import experts, spravochnik
 from kbagent.actions import log_action
 
@@ -158,9 +159,10 @@ def docs() -> None:
     agent = get_agent()
     with st.container(border=True):
         st.markdown("**Добавить документ**")
-        st.caption("PDF или DOCX, в том числе сканы" + ("" if ocr_available() else
-                   " (распознавание сканов не установлено)") + ". До утверждения документ помечается "
-                   "«загружен пользователем, не утверждён».")
+        st.caption("PDF и Word; сканы и фото страниц — текст распознаётся" + ("" if ocr_available() else
+                   " (распознавание сейчас не установлено)") + "; таблица Excel — каждая строка станет записью "
+                   "со ссылкой на лист и строку. До утверждения документ помечается «загружен пользователем, "
+                   "не утверждён».")
         all_docs = documents(agent.index)
         active = {d["id"]: d["title"] for d in all_docs if d["status"] == "действует"}
         c1, c2 = st.columns(2)
@@ -175,7 +177,7 @@ def docs() -> None:
                                 format_func=lambda x: "— не заменяет другой документ —" if x is None else active[x],
                                 help="До утверждения новую редакцию видит только администратор, сотрудники получают ответы по действующей. После «Утвердить» прежняя редакция отменяется и перестаёт участвовать в поиске")
         st.session_state.setdefault("upload_key", 0)
-        files = st.file_uploader("Файлы", type=["pdf", "docx"], accept_multiple_files=True,
+        files = st.file_uploader("Файлы", type=UPLOAD_TYPES, accept_multiple_files=True,
                                  key=f"uploader-{st.session_state.upload_key}", label_visibility="collapsed")
         if files:
             notices = st.session_state.setdefault("notices", [])
@@ -191,6 +193,9 @@ def docs() -> None:
                                    if res["chunks"] else ("warning", f"В «{res['title']}» не найден текст"))
                     if res.get("ocr_pages"):
                         notices.append(("info", f"Распознано страниц-сканов: {res['ocr_pages']}"))
+                    if res.get("table_rows") is not None:
+                        notices.append(("info", f"Таблица Excel: {res['table_rows']} строк — каждая строка "
+                                                "стала записью со ссылкой на лист и строку"))
                     if res["replaced_same"]:
                         notices.append(("warning", f"Заменён ранее загруженный «{res['title']}»"))
                     if not replaces:
@@ -300,11 +305,13 @@ def reference() -> None:
 
 
 def expert_queue() -> None:
-    """Вопросы эксперту: противоречия между источниками. Агент не выбирает значение сам."""
+    """Вопросы эксперту: противоречия между источниками и вопросы, переданные сотрудниками вручную."""
     items = experts.load()
     open_items = [x for x in items if x["status"] == "открыт"]
     st.caption("Когда источники расходятся, агент показывает оба значения, не делает вывода и передаёт вопрос "
-               "эксперту — владельцу документа или справочника. Решение эксперта фиксируется в журнале действий.")
+               "эксперту — владельцу документа или справочника. Сотрудник может передать эксперту и любой ответ, "
+               "в котором сомневается (кнопка «Эксперту» под ответом). Решение эксперта появляется под ответом "
+               "в чате и фиксируется в журнале действий.")
     c = st.columns(2)
     c[0].metric("Открытых вопросов", len(open_items))
     c[1].metric("Решено", len(items) - len(open_items))
@@ -314,17 +321,20 @@ def expert_queue() -> None:
     for it in sorted(items, key=lambda x: (x["status"] != "открыт", x["time"]), reverse=False):
         with st.container(border=True):
             details = it["details"] if isinstance(it["details"], str) else "; ".join(
-                f"{d.get('value')} — {d.get('doc')}, с. {d.get('page')}" for d in it["details"])
+                f"{d.get('value')} — {registry_info(d.get('doc', '')).get('title', d.get('doc'))}, с. {d.get('page')}"
+                for d in it["details"])
             st.markdown(f"**{it['subject']}** · {it['kind']}  \n:gray[{display(it['time'])[:16]} · обращений: "
                         f"{it.get('asked', 1)} · {it['status']}]")
-            st.caption(f"Значения: {details}")
-            if it.get("question"):
+            st.caption(details if isinstance(it["details"], str) else f"Значения: {details}")
+            if it.get("question") and it["question"] != it["subject"]:
                 st.caption(f"Вопрос сотрудника: «{it['question']}»")
+            if it.get("comment"):
+                st.caption(f"Что вызывает сомнение: {it['comment']}")
             if it["status"] == "открыт":
                 note = st.text_input("Решение эксперта", key=f"exp-note-{it['id']}",
                                      placeholder="например: верно 1 Гвыб/с, в таблице на с. 6 опечатка")
                 if st.button("Решено", key=f"exp-ok-{it['id']}", icon=":material/check:"):
-                    experts.resolve(it["id"], ctx()["login"], note)
+                    experts.resolve(it["id"], ctx()["name"], note)
                     log_action("expert", ctx()["login"], it["subject"], note)
                     st.rerun()
             else:

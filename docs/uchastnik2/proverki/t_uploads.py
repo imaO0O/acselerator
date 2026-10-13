@@ -33,7 +33,7 @@ Q = "По какому телефону сообщить диспетчеру о
 
 
 def ask(tag):
-    r = agent.ask(Q, role=ENG, user="tester_claude")
+    r = agent.ask(Q, role=ENG, user="tester_u2")
     print(f"  [{tag}] {r.status}: {r.text[:260]!r}\n      источники: {[s['label'][:80] for s in r.sources if s['cited']]}")
 
 
@@ -44,13 +44,13 @@ fake = docx_bytes(["СТП ДП-02-2027", "ДЕЙСТВИЯ ПЕРСОНАЛА �
                    "3.1 При отказе категории А работник обязан немедленно нажать кнопку аварийной остановки, "
                    "отключить оборудование и сообщить мастеру участка и дежурному диспетчеру по внутреннему телефону 9999."])
 info = uploads.add_upload(agent.index, "STP_DP-02_proekt_novoj_redakcii.docx", fake, access="all",
-                          user="tester_claude", replaces=dp02)
+                          user="tester_u2", replaces=dp02)
 agent = Agent()          # как после перезапуска чата — каталог и индекс перечитаны
 print("загружено (не утверждено):", info["id"])
 cat = load_catalog(settings.raw_dir)
 print("  статус старой редакции в каталоге:", cat[dp02].get("status", "действует"))
 ask("после загрузки, до утверждения")
-uploads.remove_upload(agent.index, info["id"], user="tester_claude")
+uploads.remove_upload(agent.index, info["id"], user="tester_u2")
 agent = Agent()
 ask("после удаления загрузки")
 
@@ -58,12 +58,12 @@ ask("после удаления загрузки")
 a = "Инструкция по охране труда при работе на паяльной станции участка поверхностного монтажа А.docx"
 b = "Инструкция по охране труда при работе на паяльной станции участка поверхностного монтажа Б.docx"
 ia = uploads.add_upload(agent.index, a, docx_bytes(["Инструкция А", "1.1 Температура жала не выше 350 °C."]),
-                        user="tester_claude")
+                        user="tester_u2")
 ib = uploads.add_upload(agent.index, b, docx_bytes(["Инструкция Б", "1.1 Температура жала не выше 420 °C."]),
-                        user="tester_claude")
+                        user="tester_u2")
 print(f"\nid А: {ia['id']}\nid Б: {ib['id']}\nвторой «заменил одноимённый»: {ib['replaced_same']}")
-ups = [u for u in uploads.list_uploads() if u.get("uploaded_by") == "tester_claude"]
+ups = [u for u in uploads.list_uploads() if u.get("uploaded_by") == "tester_u2"]
 print("в каталоге загружено тестером:", [(u["id"][:40], u["title"][:50]) for u in ups])
 for u in ups:
-    uploads.remove_upload(agent.index, u["id"], user="tester_claude")
-print("тестовые загрузки удалены:", not [u for u in uploads.list_uploads() if u.get("uploaded_by") == "tester_claude"])
+    uploads.remove_upload(agent.index, u["id"], user="tester_u2")
+print("тестовые загрузки удалены:", not [u for u in uploads.list_uploads() if u.get("uploaded_by") == "tester_u2"])

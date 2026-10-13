@@ -20,6 +20,7 @@ from kbagent.config import settings  # noqa: E402
 DEMO_USERS = [
     ("inzhener", "Инженер производства (демо)", "Инженер производства", "demo-inzhener-2026"),
     ("metrolog", "Метролог (демо)", "Метролог", "demo-metrolog-2026"),
+    ("prodazhi", "Техпродажи и сервис (демо)", "Техпродажи и сервис", "demo-prodazhi-2026"),
     ("admin", "Администратор (демо)", "Администратор", "demo-admin-2026"),
 ]
 

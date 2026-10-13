@@ -70,7 +70,7 @@ def main(flt: str = "") -> None:
             continue
         t0 = time.time()
         try:
-            r = agent.ask(q, role=role, user="tester_claude")
+            r = agent.ask(q, role=role, user="tester_u2")
             cited = [s["label"] for s in r.sources if s.get("cited")]
             rec = {"id": cid, "role": role, "q": q, "expect": expect, "status": r.status, "route": r.route,
                    "asked": r.asked, "text": r.text, "sources": cited, "rows": len(r.rows), "sql": r.sql,
