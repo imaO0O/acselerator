@@ -504,22 +504,35 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         return f"{items[0].shown()} {ref(items[0])}", items
 
     if q.reqs:
-        fit, unfit, unknown = [], [], []
+        # сначала решение по каждой модели (без ссылок), ссылки — только у показанных значений:
+        # при подборе это подходящие модели, при проверке названной модели — она сама
+        state: dict[str, str] = {}
         for m in models:
-            verdicts, ok, known = [], True, True
+            ok, known = True, True
+            for r in q.reqs:
+                items = by.get((m, r.param), [])
+                if not items or (m, r.param) in contradicted:
+                    known = False
+                    continue
+                ok = ok and _fits(items[0], r)
+            state[m] = "fit" if ok and known else "unfit" if not ok else "unknown"
+        shown_models = q.models or [m for m in models if state[m] == "fit"][:12]
+
+        def verdicts(m: str) -> list[str]:
+            out = []
             for r in q.reqs:
                 items = by.get((m, r.param), [])
                 text, _ = cell(m, r.param)
                 rows.append([m, r.param, re.sub(r"\s*\[\d+\]", "", text)])
                 if not items or (m, r.param) in contradicted:
-                    known = False
-                    verdicts.append(f"{r.param.lower()}: {text}")
-                    continue
-                good = _fits(items[0], r)
-                ok = ok and good
-                need = f"{REQ_WORDS[r.mode]} {r.shown}".strip()
-                verdicts.append(f"{r.param.lower()} — {items[0].shown()} {ref(items[0])}, нужно {need}")
-            (fit if ok and known else unknown if not known and ok else unfit).append((m, verdicts))
+                    out.append(f"{r.param.lower()}: {text}")
+                else:
+                    out.append(f"{r.param.lower()} — {text}, нужно {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " "))
+            return out
+
+        fit = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "fit"]
+        unfit = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "unfit"]
+        unknown = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "unknown"]
         need = "; ".join(f"{r.param.lower()} {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in q.reqs)
         if q.models:
             for m, verdicts in fit + unfit + unknown:
@@ -531,6 +544,8 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
             head = (f"Подбор по справочнику параметров — {q.kind.lower() if q.kind else 'продукция'}, требование: {need}. "
                     f"Подходят: {len(fit)} из {len(models)}.")
             lines += [f"- **{m}**: " + "; ".join(v) for m, v in fit[:12]]
+            if len(fit) > 12:
+                lines.append(f"- и ещё моделей: {len(fit) - 12} — в таблице ниже")
             if not fit:
                 lines.append("- Ни одна модель в справочнике не подходит.")
             if unfit:

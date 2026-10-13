@@ -17,6 +17,7 @@ from .config import settings
 PATH = settings.raw_dir.parent / "pravila_raschetov.yaml"
 QTY_RE = re.compile(r"(?:парти\w+\s+(?:из\s+)?|в\s+партии\s+)(\d[\d\s]*\d|\d+)|(\d[\d\s]*\d|\d+)\s*(?:шт\.?|штук\w*|изделий|"
                     r"резистор\w*|конденсатор\w*|микросхем\w*|ЭРИ|компонент\w*|единиц\w*)", re.I)
+THRESHOLD_RE = re.compile(r"(?:больше|более|свыше|менее|меньше|до|от|превыша\w*|выше|ниже|[<>≤≥])\s*$", re.I)
 INTENT_RE = re.compile(r"сколько\b[^?]*\b(?:осмотреть|проверить|отобрать|проконтролировать|взять|контролировать)|"
                        r"объ[её]м\w*\s+выборк\w*|выборк\w*", re.I)
 
@@ -71,7 +72,8 @@ def match(question: str, rules: list[Rule] | None = None) -> list[Result]:
     """Расчёты для вопроса: есть количество и вопрос «сколько осмотреть / проверить / какой объём выборки».
     Подходят правила, чьи слова есть в вопросе; если вопрос общий («какой объём выборки») — все правила."""
     rules = load_rules() if rules is None else rules
-    qty = QTY_RE.search(question)
+    # «если в партии больше 100 штук» — порог из правила, а не размер партии: такой вопрос — к документу
+    qty = next((m for m in QTY_RE.finditer(question) if not THRESHOLD_RE.search(question[:m.start()])), None)
     if not rules or not qty or not INTENT_RE.search(question):
         return []
     n = int(re.sub(r"\s", "", qty.group(1) or qty.group(2)))

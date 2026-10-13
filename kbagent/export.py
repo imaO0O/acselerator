@@ -39,6 +39,47 @@ def _text(doc, text: str) -> None:
             _runs(doc.add_paragraph(), line)
 
 
+def draft_text(item: dict, signer: str = "") -> str:
+    """Черновик ответа клиенту или коллеге: обращение, ответ без разметки, источники, подпись.
+    Ничего не отправляется — сотрудник правит текст и утверждает."""
+    body = re.sub(r"\*\*(.+?)\*\*", r"\1", item["text"].replace("[БД]", "[учётная база]"))
+    # служебные пометки для сотрудника («Это черновик — проверьте…») клиенту не нужны
+    body = re.sub(r"(?m)^(?:Значения — из справочника|Числа посчитаны программой)[^\n]*\n?", "", body)
+    body = re.sub(r"~~(.+?)~~", r"было: \1;", body)
+    cited = [s for s in item.get("sources", []) if s.get("cited")]
+    lines = ["Добрый день!", "", f"Отвечаем на ваш вопрос: «{item['question']}».", "", body.strip()]
+    if cited:
+        lines += ["", "Источники:"] + [f"[{s['n']}] {s['label']}" for s in cited]
+    lines += ["", "С уважением,", signer or "[ФИО, должность]"]
+    return "\n".join(lines)
+
+
+def draft_docx(text: str, item: dict, approved_by: str, approved_at: str, app_name: str) -> bytes:
+    """Утверждённый черновик — документ Word с отметкой, кто и когда утвердил."""
+    doc = Document()
+    for section in doc.sections:
+        section.page_width, section.page_height = Mm(210), Mm(297)
+        section.left_margin, section.right_margin = Mm(20), Mm(10)
+        section.top_margin, section.bottom_margin = Mm(20), Mm(20)
+    style = doc.styles["Normal"]
+    style.font.name, style.font.size = "Times New Roman", Pt(12)
+    style.paragraph_format.first_line_indent = Cm(1.25)
+    style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    style.paragraph_format.space_after = Pt(0)
+    for line in text.splitlines():
+        if line.strip():
+            _runs(doc.add_paragraph(), line.rstrip())
+        else:
+            doc.add_paragraph()
+    note = doc.add_paragraph()
+    run = note.add_run(f"Черновик подготовлен: {app_name}, по документам и данным предприятия со ссылками на "
+                       f"источники. Утвердил: {approved_by}, {approved_at}.")
+    run.italic, run.font.color.rgb = True, GRAY
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def answer_docx(item: dict, app_name: str, user: str | None = None) -> bytes:
     """item — элемент диалога чата: question, text, sources, columns/labels/rows, at, route, status."""
     doc = Document()

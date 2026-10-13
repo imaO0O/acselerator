@@ -100,3 +100,9 @@ def test_calculations_follow_agreed_rules_not_the_model():
     assert [r.value for r in R.match("Партия 80 конденсаторов — сколько осмотреть?")] == [80]      # сплошной контроль
     assert [r.value for r in R.match("Партия 60 шт — сколько проверить по электрическим параметрам?")] == [5]
     assert R.match("Сколько дней даётся на входной контроль ЭРИ?") == []
+
+
+def test_threshold_in_question_is_not_a_batch_size():
+    from kbagent import raschety as R
+    # «если в партии больше 100 штук» — вопрос о правиле, а не расчёт для партии из 100 штук
+    assert R.match("Какой объём выборки при внешнем осмотре ЭРИ, если в партии больше 100 штук?") == []

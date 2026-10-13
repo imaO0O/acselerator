@@ -9,7 +9,8 @@ from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ct
                            health, inject_css, page_png)
 from kbagent import auth
 from kbagent.database import column_label, display
-from kbagent.export import answer_docx
+from kbagent.actions import log_action
+from kbagent.export import answer_docx, draft_docx, draft_text
 from kbagent.preview import source_path
 from kbagent.ingest import expired_on, registry_info
 from kbagent.uploads import KIND_PENDING
@@ -155,6 +156,32 @@ def _on_feedback(i: int, key: str) -> None:
         _save()
 
 
+def _approve_draft(i: int, key: str) -> None:
+    item = _conv()["items"][i]
+    item["draft"] = st.session_state.get(key) or item.get("draft", "")
+    item["draft_approved"] = {"by": ctx()["name"], "at": time.strftime("%d.%m.%Y %H:%M")}
+    log_action("draft_approved", ctx()["login"], item["question"][:120],
+               f"источников: {sum(1 for s in item.get('sources', []) if s.get('cited'))}")
+    _save()
+
+
+@st.dialog("Черновик ответа", width="large")
+def draft_dialog(i: int, uid: str) -> None:
+    """Черновик ответа клиенту или коллеге. Автоматической отправки нет: сотрудник проверяет источники,
+    правит текст и утверждает — утверждение записывается в журнал действий."""
+    item = _conv()["items"][i]
+    st.caption("Проверьте текст и источники — ссылки под ответом в чате открывают страницу с выделенным фрагментом. "
+               "Ничего не отправляется автоматически.")
+    key = f"draft-{uid}"
+    text = st.text_area("Текст", value=item.get("draft") or draft_text(item, ctx()["name"]), height=360, key=key,
+                        label_visibility="collapsed")
+    when = time.strftime("%d.%m.%Y %H:%M")
+    st.download_button("Утвердить и скачать Word", data=draft_docx(text, item, ctx()["name"], when, APP_NAME),
+                       file_name=f"chernovik-{i + 1}.docx", type="primary", icon=":material/task_alt:",
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                       on_click=_approve_draft, args=(i, key), key=f"draft-ok-{uid}")
+
+
 def _on_comment(i: int, key: str) -> None:
     item = _conv()["items"][i]
     text = (st.session_state.get(key) or "").strip()
@@ -232,7 +259,7 @@ def render_answer(item: dict, i: int) -> None:
         if hints:
             st.caption("Возможно, поможет: " + "; ".join(_short(s["label"], 70) for s in hints[:3]))
 
-    left, mid, right = st.columns([5, 2, 2], vertical_alignment="center")
+    left, mid, draft, right = st.columns([4, 2, 2, 2], vertical_alignment="center")
     seconds = f"{item['seconds']:.1f}".replace(".", ",")
     left.caption(ROUTE_LABELS.get(item["route"], "") + ("" if item["status"] == "info" else f" · {seconds} с"))
     with mid:
@@ -241,6 +268,12 @@ def render_answer(item: dict, i: int) -> None:
                 st.feedback("thumbs", key=f"fb-{uid}", on_change=_on_feedback, args=(i, f"fb-{uid}"))
             else:
                 st.caption("Оценка: " + ("👍" if item["feedback"] == 1 else "👎"))
+    if item["status"] == "answer" and draft.button("Черновик", key=f"dr-{uid}", icon=":material/edit_note:",
+                                                   type="tertiary", help="Черновик ответа клиенту или коллеге: "
+                                                   "правка текста и утверждение сотрудником"):
+        draft_dialog(i, uid)
+    if item.get("draft_approved"):
+        st.caption(f"Черновик утверждён: {item['draft_approved']['by']}, {item['draft_approved']['at']}")
     if item["status"] != "info":
         right.download_button("В Word", data=answer_docx(item, APP_NAME, ctx()["name"]), file_name=f"otvet-{i + 1}.docx",
                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
