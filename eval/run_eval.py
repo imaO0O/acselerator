@@ -87,7 +87,11 @@ def source_ok(sources: list[dict], gold: dict) -> bool:
 
 
 def ask_with_history(agent: Agent, q: dict, role: str):
-    """Предыдущие вопросы диалога задаются по-настоящему — как в чате."""
+    """Предыдущие вопросы диалога задаются по-настоящему — как в чате. file — письмо клиента файлом
+    (.eml, PDF, Word): прикладывается к сообщению, как скрепкой в поле ввода."""
+    if q.get("file"):
+        path = ROOT / q["file"]
+        return agent.attachment(path.name, path.read_bytes(), role=role, question=q.get("question", ""), user="eval")
     context = []
     for prev in q.get("history", []):
         r = agent.ask(prev, role=role, history=context, user="eval")
@@ -120,11 +124,14 @@ def main():
     rows = []
     for q in questions:
         r = ask_with_history(agent, q, q.get("role", args.role))     # у вопроса может быть своя роль
+        question = q.get("question", "")
+        if q.get("file"):                                            # в отчёте — подпись и имя файла
+            question = f"{question or 'Файл'} · {Path(q['file']).name}"
         # сдвиг дат — после ответа: прогон может захватить полночь, и база сдвинет даты на день
         must = [expand_dates(m, demo_db.offset()) for m in q.get("must_include", [])]
         # факты ищутся в тексте ответа: таблица записей под ним не оправдывает «Записей нет» в тексте
         evidence = r.text
-        row = {"id": q["id"], "group": q.get("group", "основной"), "type": q["type"], "question": q["question"],
+        row = {"id": q["id"], "group": q.get("group", "основной"), "type": q["type"], "question": question,
                "asked": r.asked or "", "route": r.route, "status": r.status, "answer": r.text,
                "seconds": r.seconds, "best_score": r.stats.get("best_score"),
                "cited": "; ".join(s["label"] for s in r.sources if s["cited"]), "sql": r.sql or "",
@@ -147,7 +154,7 @@ def main():
                               and has_none(r.text, q.get("must_exclude", [])))
         rows.append(row)
         mark = "+" if row["correct"] else "-"
-        print(f"{mark} {q['id']} [{r.route}/{r.status}, {r.seconds}s] {q['question'][:70]}")
+        print(f"{mark} {q['id']} [{r.route}/{r.status}, {r.seconds}s] {question[:70]}")
 
     doc = [r for r in rows if r["type"] == "doc"]
     none = [r for r in rows if r["type"] == "none"]
@@ -177,7 +184,9 @@ def main():
     m = {k: v for k, v in m.items() if not v.endswith(" из 0")}
 
     groups = []
-    for g in [g for g in GROUPS if any(r["group"] == g for r in rows)]:
+    # группы набора — сначала известные по порядку, затем свои группы набора (у писем ТКП — «латиница», «таблица»…)
+    for g in [g for g in GROUPS if any(r["group"] == g for r in rows)] + list(
+            dict.fromkeys(r["group"] for r in rows if r["group"] not in GROUPS)):
         cells = []
         for items in (doc, none, db, both + clarify + info):
             gi = [r for r in items if r["group"] == g]

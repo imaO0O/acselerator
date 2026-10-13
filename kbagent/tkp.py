@@ -17,8 +17,18 @@ from dataclasses import asdict, dataclass, field
 
 from . import spravochnik as spr
 
-TKP_WORDS_RE = re.compile(r"\bТ?КП\b|коммерческ\w*\s+предложени\w*|запрос\w*\s+клиент\w*|письм\w*\s+клиент\w*|"
-                          r"заявк\w*\s+клиент\w*|подготов\w*\s+предложени\w*|подбер\w*\s+(?:и\s+)?предлож\w*", re.I)
+REQUEST_VERB = r"(?:просим|прошу|просьба|пришлите|направьте|вышлите|укажите|сообщите|выставьте|предоставьте)"
+TKP_WORDS_RE = re.compile(r"\bТ?КП\b|ком+ерческ\w*\s+предложени\w*|запрос\w*\s+клиент\w*|письм\w*\s+клиент\w*|"
+                          r"заявк\w*\s+клиент\w*|подготов\w*\s+предложени\w*|подбер\w*\s+(?:и\s+)?предлож\w*|"
+                          # «просим предложение на мультиметр», «прошу направить цену и срок поставки»
+                          rf"{REQUEST_VERB}[^.?!\n]{{0,40}}?(?:предложени\w*|\bцен[аыуе]?\b|срок\w*\s+поставк\w*|"
+                          r"сч[её]т\w*)", re.I)
+# «или аналог», «или эквивалент» — названная модель не обязательна, подбираются и другие
+ANALOG_RE = re.compile(r"или\s+(?:\w+\s+)?(?:аналог|эквивалент)\w*|\(\s*(?:или\s+)?аналог\w*\s*\)|"
+                       r"аналог\w*\s+допуска\w*", re.I)
+# фен и паяльник после «с» — часть той же паяльной станции, а не новая позиция
+FEATURE_RE = re.compile(r"(?:\bс|\bсо)\s+$|\bи\s+$", re.I)
+PART_PARAM_RE = re.compile(r"(?:температур|мощност|жал)\w*\s+$", re.I)
 # продукция, которой нет в справочнике: позиция есть, но подбирать не по чему — к техническому отделу
 OTHER_RE = re.compile(r"источник\w*\s+питани\w*|блок\w*\s+питани\w*|генератор\w*|частотомер\w*|анализатор\w*|"
                       r"токов\w*\s+клещ\w*|клещ\w*|мегаомметр\w*|пирометр\w*|термометр\w*|тепловизор\w*|"
@@ -28,7 +38,10 @@ SEP_RE = re.compile(r"[.;:!?\n]+\s*|,\s+|\s(?:и|а\s+также|также|пл
 WORD_NUM = {"один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6,
             "семь": 7, "восемь": 8, "девять": 9, "десять": 10}
 QTY_BEFORE_RE = re.compile(rf"(?:^|\s)(\d{{1,3}}|{'|'.join(WORD_NUM)})\s+(?:[а-яё]+\s+)?$", re.I)
-QTY_RE = re.compile(r"(\d{1,3})\s*(?:шт\b\.?|штук\w*|ед\.|единиц\w*|комплект\w*)", re.I)
+# «3 шт.», «2 (двух) штук», «в количестве 5», «5 ед.», «3 комплекта»
+QTY_RE = re.compile(r"(\d{1,3})\s*(?:\([^)\d]{1,20}\)\s*)?(?:шт\b\.?|штук\w*|ед\.|единиц\w*|комплект\w*)|"
+                    r"в\s+количестве\s+(\d{1,3})", re.I)
+TABLE_QTY_RE = re.compile(r"(\d{1,4})\s*(?:шт\.?|ед\.?|компл\.?)?")
 PRICE_WORDS_RE = re.compile(r"\b(?:с\s+)?(?:цен\w*|стоимост\w*|прайс\w*)\b", re.I)
 
 
@@ -57,6 +70,7 @@ class Position:
     checks: list = field(default_factory=list)
     note: str = ""
     ask_client: str = ""
+    instead_of: str = ""     # «MAS830L или аналог», а MAS830L не подходит: «MAS830L — постоянный ток 10 А …»
 
 
 @dataclass
@@ -97,8 +111,17 @@ def _anchors(text: str, values: list) -> list[tuple[int, int, str]]:
     for a in found:
         if out and a[0] < out[-1][1]:
             continue                                    # пересекается с предыдущим
+        between = text[out[-1][1]:a[0]] if out else ""
+        same = out and (out[-1][2] == a[2] or not out[-1][2] or not a[2])
         # «осциллограф АКИП-4143/1», «паяльная станция с феном» — одна позиция, если между ними нет разделителя
-        if out and not SEP_RE.search(text[out[-1][1]:a[0]]) and (out[-1][2] == a[2] or not out[-1][2] or not a[2]):
+        if same and not SEP_RE.search(between):
+            out[-1] = (out[-1][0], a[1], out[-1][2] or a[2])
+            continue
+        # «температура до 480 °C, с феном», «станция с паяльником и феном», «температура фена до 450 °C» —
+        # фен и паяльник той же станции, а не новая позиция
+        if same and a[2] == "Паяльная станция" and re.match(r"(?:термо)?фен|паяльник", text[a[0]:a[1]], re.I) \
+                and (PART_PARAM_RE.search(between) or FEATURE_RE.search(between) and (
+                    not re.search(r"\bи\s+$", between) or re.search(r"\bсо?\s", text[out[-1][0]:out[-1][1]]))):
             out[-1] = (out[-1][0], a[1], out[-1][2] or a[2])
             continue
         out.append(a)
@@ -119,13 +142,28 @@ def _segments(text: str, anchors: list) -> list[tuple[str, str, int]]:
         qty = 1
         before = QTY_BEFORE_RE.search(text[starts[i]:start])
         after = QTY_RE.search(seg)
-        if after:
-            qty = int(after.group(1))
+        table = _table_qty(seg)
+        if table:
+            qty = table
+        elif after:
+            qty = int(after.group(1) or after.group(2))
         elif before:
             word = before.group(1).lower()
             qty = int(word) if word.isdigit() else WORD_NUM[word]
         out.append((seg.strip(" ,;.—-\n"), kind, qty))
     return out
+
+
+def _table_qty(row: str) -> int | None:
+    """Строка таблицы из письма («1 | Осциллограф | полоса от 100 МГц | 2»; вставленная из Word — через табуляцию):
+    количество — последняя ячейка-число после наименования; номер строки в первой ячейке не считается."""
+    if "|" not in row and "\t" not in row:
+        return None
+    cells = [c.strip() for c in re.split(r"[|\t]", row.strip(" \n"))]
+    if cells and re.fullmatch(r"\d{1,3}\.?", cells[0]):
+        cells = cells[1:]
+    nums = [m for c in cells[1:] if (m := TABLE_QTY_RE.fullmatch(c))]
+    return int(nums[-1].group(1)) if nums else None
 
 
 def _excess(v, r) -> float:
@@ -183,8 +221,12 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         q = spr.understand(PRICE_WORDS_RE.sub(" ", seg), values, letter=True)
         named = spr._find_models(seg, values)
         reqs = q.reqs if q else []
-        pos.reqs = [f"{r.param.lower()} {spr.REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in reqs]
-        candidates = named or sorted({v.model for v in values if v.kind == kind})
+        pos.reqs = [spr.req_text(r) for r in reqs]
+        others = sorted({v.model for v in values if v.kind == kind})
+        candidates = named or others
+        analog = bool(named and reqs and ANALOG_RE.search(seg))
+        if analog:                                         # «MAS830L или аналог» — названная первой, затем другие
+            candidates = named + [m for m in others if m not in named]
         pos.total = len(candidates)
         if not reqs and not named:
             pos.status = "no_reqs"
@@ -206,11 +248,16 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         fit = [m for m in candidates if state[m] == "fit"]
         pos.fit_count = len(fit)
         if fit:
-            best = min(fit, key=lambda m: (sum(_excess(_first(by, m, r.param, contradicted, decided), r)
-                                               for r in reqs), m))
+            # названная клиентом модель подходит — её и предлагаем, аналоги — альтернативой
+            best = next((m for m in named if m in fit and analog), None) or min(
+                fit, key=lambda m: (sum(_excess(_first(by, m, r.param, contradicted, decided), r) for r in reqs), m))
             pos.model = best
             pos.alternatives = [m for m in fit if m != best][:3]
             pos.checks = [_check(best, r.param, r, by, contradicted, decided, ref) for r in reqs]
+            if analog and best not in named:
+                missed = "; ".join(f"{c.param.lower()} {c.value} при требовании {c.need}"
+                                   for c in checks[named[0]] if c.ok is False)
+                pos.instead_of = f"{named[0]} не подходит: {missed or 'нет данных по требованиям'}"
             pos.status = "offer"
             pos.note = ("предложена минимально достаточная модель — с наименьшим запасом по требованиям; "
                         "окончательный выбор — за менеджером")
@@ -242,7 +289,17 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         missed = "; ".join(f"{c.param.lower()} {c.value} при требовании {c.need}" for c in pos.checks if c.ok is False)
         pos.note = f"ни одна модель в справочнике не подходит; ближайшая — {closest}: {missed}"
         pos.ask_client = f"{kind}: в нашем ассортименте нет модели под все требования ({missed}) — допустимо ли?"
-    return Tkp(positions, sources, [], pending)
+    return Tkp(_drop_mentions(positions), sources, [], pending)
+
+
+def _drop_mentions(positions: list) -> list:
+    """Тема письма или заголовок («Запрос КП: осциллограф и мультиметры») называет ту же продукцию, что и позиции
+    ниже: упоминание без требований, модели и количества не считается отдельной позицией."""
+    detailed = {p.kind for p in positions if p.status not in ("no_reqs", "not_in_catalog")}
+    kept = [p for p in positions if not (p.status == "no_reqs" and p.qty == 1 and p.kind in detailed)]
+    for n, p in enumerate(kept, 1):
+        p.n = n
+    return kept
 
 
 def _first(by, m, param, contradicted, decided):
@@ -255,7 +312,8 @@ def _check(m, param, r, by, contradicted, decided, ref, lazy: bool = False) -> C
     items, state, d = spr.pick(m, param, by, contradicted, decided)
     need = f"{spr.REQ_WORDS[r.mode]} {r.shown}".strip() if r else ""
     if state == "missing":
-        return Check(param, need, "", None, None, "нет данных")
+        # «с феном», а фена у модели в справочнике нет — не подходит, а не «нет данных»
+        return Check(param, need, "", None, False if r and r.mode == "has" else None, "нет данных")
     if state in ("contradiction", "noted"):
         value = "; ".join(v.shown() for v in items)
         refs = [ref(v) for v in items][0] if not lazy else None
@@ -370,6 +428,8 @@ def answer_text(t: Tkp) -> str:
             head += " Требования: " + "; ".join(p.reqs) + "."
         lines.append(head)
         if p.status == "offer":
+            if p.instead_of:
+                lines.append(f"- Названная клиентом модель {p.instead_of} — предлагаем аналог.")
             lines.append(f"- Предлагаем **{p.model}**: " + "; ".join(_check_text(c) for c in p.checks) + ".")
             more = f"Также подходят: {', '.join(p.alternatives)}" if p.alternatives else "Других подходящих нет"
             lines.append(f"- {more} (всего {p.fit_count} из {p.total}).")

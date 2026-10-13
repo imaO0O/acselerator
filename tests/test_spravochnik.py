@@ -227,3 +227,78 @@ def test_letter_positions_keep_requirements_next_to_service_words(tmp_path, monk
     assert (mm.status, mm.model, mm.qty) == ("offer", "DT9205A", 3)
     values = _values(tmp_path)
     assert S.understand("Мультиметр X-100 с питанием от батареи — какое постоянное напряжение измеряет?", values)
+
+
+def _positions(text, tmp_path, monkeypatch):
+    from kbagent import experts, tkp
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    t = tkp.parse(text, {"all"})
+    assert tkp.is_request(text, t), text
+    return [(p.kind, p.qty, p.status, p.model) for p in t.positions], t
+
+
+def test_letter_range_and_latin_units(tmp_path, monkeypatch):
+    # «от 100 до 450 °C» — обе границы: Lukey и SBK (от 200 °C) не подходят
+    pos, t = _positions("Нужна паяльная станция с температурой жала от 100 до 450 °C, просим КП", tmp_path, monkeypatch)
+    assert pos == [("Паяльная станция", 1, "offer", "CXG DES H95")] and t.positions[0].fit_count == 1
+    assert t.positions[0].reqs == ["температура жала паяльника от 100 °C", "температура жала паяльника до 450 °C"]
+    # единицы латиницей: GHz, A, W, «≥»
+    pos, t = _positions("Просим КП: осциллограф 4 канала, bandwidth >= 1 GHz; мультиметр DC 15 A — 2 шт.; "
+                        "паяльная станция с паяльником 90 W", tmp_path, monkeypatch)
+    assert pos == [("Осциллограф", 1, "offer", "АКИП-4143/1"), ("Мультиметр", 2, "offer", "DT9205A"),
+                   ("Паяльная станция", 1, "offer", "CXG DES H95")]
+    assert "мощность паяльника не менее 90 Вт" in t.positions[2].reqs
+    # обозначение модели с латинской буквой — не единица: «DT9205A» — не «9205 А»
+    assert S._requirements("мультиметр DT9205A на ток 20 A", "Мультиметр")[0].shown == "20 А"
+
+
+def test_letter_with_typos_and_request_words(tmp_path, monkeypatch):
+    pos, _ = _positions("Здраствуйте! Просим комерческое предложение: осцилограф с полосой от 150 МГц на 4 канала, "
+                        "мультимер для измерения тока до 15 А, паяльная станцыя до 450 С.", tmp_path, monkeypatch)
+    assert [p[0] for p in pos] == ["Осциллограф", "Мультиметр", "Паяльная станция"] and pos[2][3] == "CXG DES H95"
+    # «просим предложение», «цену и срок поставки» — запрос клиента, а вопрос о сроке без просьбы — нет
+    _positions("Просим предложение на мультиметр: переменное напряжение до 750 В", tmp_path, monkeypatch)
+    pos, _ = _positions("Прошу направить цену и срок поставки: осциллограф АКИП-4122/12(V) — 1 шт., "
+                        "мультиметр DT9208A — 2 шт.", tmp_path, monkeypatch)
+    assert pos == [("Осциллограф", 1, "named", "АКИП-4122/12(V)"), ("Мультиметр", 2, "named", "DT9208A")]
+    from kbagent import tkp
+    q = "Какой срок поставки у осциллографа АКИП-4115/2В?"
+    assert not tkp.is_request(q, tkp.parse(q, {"all"}))
+
+
+def test_letter_quantities_tables_and_hot_air(tmp_path, monkeypatch):
+    pos, t = _positions("Коммерческое предложение на: осциллограф с полосой от 300 МГц в количестве 2 (двух) штук; "
+                        "мультиметр с сопротивлением до 200 МОм — 10 ед.; паяльная станция с феном — 3 комплекта.",
+                        tmp_path, monkeypatch)
+    assert [p[1] for p in pos] == [2, 10, 3] and t.positions[2].reqs == ["наличие фена"]
+    assert t.positions[2].model in ("CXG DES H95", "Lukey 852D+")          # только станции с феном
+    # таблица из Word: «|» после разбора файла, табуляция при вставке; «с феном» — та же позиция, а не новая
+    for sep in (" | ", "\t"):
+        rows = [["№", "Наименование", "Характеристики", "Кол-во"],
+                ["1", "Осциллограф", "полоса не менее 100 МГц, 2 канала", "2"],
+                ["2", "Мультиметр", "постоянное напряжение до 1000 В", "5"],
+                ["3", "Паяльная станция", "температура до 480 °C, с феном", "1"]]
+        text = "Просим ТКП по позициям:\n" + "\n".join(sep.join(r) for r in rows)
+        pos, t = _positions(text, tmp_path, monkeypatch)
+        assert [(p[0], p[1]) for p in pos] == [("Осциллограф", 2), ("Мультиметр", 5), ("Паяльная станция", 1)], sep
+        assert t.positions[2].reqs == ["температура жала паяльника до 480 °C", "наличие фена"]
+    # «температура фена» после станции — параметр той же станции
+    pos, t = _positions("Просим КП: паяльная станция с паяльником и феном, температура фена до 450 °C — 2 шт.",
+                        tmp_path, monkeypatch)
+    assert pos[0][:2] == ("Паяльная станция", 2) and len(pos) == 1
+    assert t.positions[0].reqs == ["температура фена до 450 °C"]
+
+
+def test_letter_analog_and_subject_line(tmp_path, monkeypatch):
+    from kbagent import tkp
+    # тема письма .eml называет ту же продукцию — не отдельные позиции; «или аналог» — подбор и среди других моделей
+    eml = ("Subject: =?utf-8?b?" + __import__("base64").b64encode("Запрос КП: осциллограф и мультиметры".encode())
+           .decode() + "?=\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\n"
+           "Просим КП: осциллограф АКИП-4122/12(V) или аналог с полосой не менее 200 МГц — 2 шт.; мультиметр "
+           "MAS830L или аналог для постоянного тока не менее 15 А — 3 шт.").encode("utf-8")
+    text = tkp.letter_text("m.eml", eml)
+    pos, t = _positions(text, tmp_path, monkeypatch)
+    assert pos == [("Осциллограф", 2, "offer", "АКИП-4122/12(V)"), ("Мультиметр", 3, "offer", "DT9205A")]
+    assert t.positions[0].alternatives                       # названная подходит — она первая, аналоги — ниже
+    answer = tkp.answer_text(t)
+    assert "MAS830L не подходит: постоянный ток, верхний предел 10 А при требовании не менее 15 А" in answer

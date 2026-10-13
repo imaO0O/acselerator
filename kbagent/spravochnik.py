@@ -214,8 +214,9 @@ def replace_file(filename: str, data: bytes) -> Report:
 # ---------- понимание вопроса ----------
 
 LAT = str.maketrans("АВЕКМНОРСТХУавекмнорстху", "ABEKMHOPCTXYABEKMHOPCTXY")
-KINDS = {"Осциллограф": r"осциллограф\w*", "Мультиметр": r"мультиметр\w*",
-         "Паяльная станция": r"паяльн\w+\s+станц\w*|станци\w+\s+для\s+пайки|паяльник\w*|термофен\w*|\bфен\w*"}
+# с частыми опечатками писем: «осцилограф», «мультимер», «мультиметер», «паяльная станцыя»
+KINDS = {"Осциллограф": r"осц[иы]л+[оа]граф\w*", "Мультиметр": r"мул[ьъ]?тим[еи]т?е?р\w*",
+         "Паяльная станция": r"паяльн\w+\s+станц\w*|станц\w+\s+для\s+пайки|паяльник\w*|термофен\w*|\bфен\w*"}
 
 PARAMS = {   # параметр → слова в вопросе
     "Полоса пропускания": r"полос\w*",
@@ -250,8 +251,10 @@ PROCEDURE_RE = re.compile(
 # («мультиметр с питанием от батареи на напряжение до 600 В» — требование к пределу, его не трогаем)
 SUPPLY_RE = re.compile(r"напряжени\w*\s+(?:электро)?питани\w*|напряжени\w*\s+(?:питающей\s+|электрической\s+)?сет[иь]\b|"
                        r"напряжени\w*\s+(?:\S+\s+)?(?:аккумулятор\w*|батаре\w*|элемент\w*\s+питания)", re.I)
-REQ_RE = re.compile(rf"({NUM})\s*(ГГц|МГц|кГц|Гц|Гвыб/с|Мвыб/с|кВ|мВ|В|мкА|мА|А|МОм|кОм|Ом|°\s?[CС]|градус\w*|"
-                    rf"кВт|Вт|ВА|пс|нс|мкс|мс|кг|г)(?![А-Яа-яA-Za-z])")
+UNIT_PAT = r"(?:ГГц|МГц|кГц|Гц|Гвыб/с|Мвыб/с|кВ|мВ|В|мкА|мА|А|МОм|кОм|Ом|°\s?[CС]|градус\w*|кВт|Вт|ВА|пс|нс|мкс|мс|кг|г)"
+REQ_RE = re.compile(rf"({NUM})\s*({UNIT_PAT[3:-1]})(?![А-Яа-яA-Za-z])")
+# «от 100 до 450 °C», «100–450 °C» — единица у второго числа относится к обоим
+RANGE_REQ_RE = re.compile(rf"(?:\bот\s+)?({NUM})\s*(?:\bдо\b|[-–—…]+)\s*({NUM})\s*({UNIT_PAT})(?![А-Яа-яA-Za-z])")
 CHANNELS_RE = re.compile(r"(\d+)\s*-?\s*(?:х\s*)?канал\w*|(двух|трёх|трех|четырёх|четырех)\s*канальн\w*", re.I)
 WORD_NUM = {"двух": 2, "трёх": 3, "трех": 3, "четырёх": 4, "четырех": 4}
 # у этих параметров «лучше меньше»: требование «X» — значит не больше X
@@ -336,7 +339,21 @@ def _brand_words(values: list[Value]) -> dict[str, set[str]]:
     return out
 
 
-def _unit_param(unit: str, kind: str | None, question: str) -> str | None:
+AC_RE = re.compile(r"переменн|\bAC[VA]?\b|~", re.I)
+HOT_AIR_RE = re.compile(r"\bфен\w*|термофен", re.I)
+
+
+def _hot_air(question: str, before: str) -> bool:
+    """Фен или паяльник: по словам перед числом («температура фена до 450»); если там нет ни того,
+    ни другого — фен, только когда паяльник в вопросе не упомянут («паяльник до 480 °C, с феном» — паяльник)."""
+    if HOT_AIR_RE.search(before):
+        return True
+    if re.search(r"жал\w*|паяльник\w*", before, re.I):
+        return False
+    return bool(HOT_AIR_RE.search(question)) and not re.search(r"жал\w*|паяльник\w*|\bс\s+(?:термо)?фен", question, re.I)
+
+
+def _unit_param(unit: str, kind: str | None, question: str, before: str = "") -> str | None:
     dim = UNITS[unit][0]
     q = question.lower()
     if dim == "частота":
@@ -346,17 +363,18 @@ def _unit_param(unit: str, kind: str | None, question: str) -> str | None:
     if dim == "напряжение":
         if kind == "Осциллограф":
             return "Максимальное входное напряжение"
-        return "Переменное напряжение, верхний предел" if "переменн" in q else "Постоянное напряжение, верхний предел"
+        return ("Переменное напряжение, верхний предел" if AC_RE.search(question)
+                else "Постоянное напряжение, верхний предел")
     if dim == "ток":
-        return "Переменный ток, верхний предел" if "переменн" in q else "Постоянный ток, верхний предел"
+        return "Переменный ток, верхний предел" if AC_RE.search(question) else "Постоянный ток, верхний предел"
     if dim == "сопротивление":
         return "Сопротивление, верхний предел"
     if dim == "температура":
-        return "Температура фена" if re.search(r"\bфен\w*|термофен", q) else "Температура жала паяльника"
+        return "Температура фена" if _hot_air(question, before) else "Температура жала паяльника"
     if dim == "мощность":
         if re.search(r"потребля", q):
             return "Потребляемая мощность"
-        return "Мощность фена" if re.search(r"\bфен\w*|термофен", q) else "Мощность паяльника"
+        return "Мощность фена" if _hot_air(question, before) else "Мощность паяльника"
     if dim == "полная мощность":
         return "Потребляемая мощность"
     if dim == "время":
@@ -388,6 +406,7 @@ def _mode(before: str, param: str) -> str:
     return "max" if param in SMALLER_BETTER else "min"
 
 
+LATIN_UNIT = {"A": "А", "V": "В", "W": "Вт"}
 LOWER_UNITS = [   # как пишут в письмах: «150 мгц», «20 а», «1000в» — однозначные варианты к основному написанию
     (re.compile(r"(\d)\s*(?:ггц|ghz)(?![а-яa-z])", re.I), r"\1 ГГц"),
     (re.compile(r"(\d)\s*(?:мгц|mhz)(?![а-яa-z])", re.I), r"\1 МГц"),
@@ -396,6 +415,24 @@ LOWER_UNITS = [   # как пишут в письмах: «150 мгц», «20 а
     # одиночные «а» и «в» — только в конце фразы или перед знаком: «20 а?», но не «20 а также», «2 в 1»
     (re.compile(r"(\d)\s*а(?=\s*(?:[,.;:?!)]|$))"), r"\1 А"),
     (re.compile(r"(\d)\s*в(?=\s*(?:[,.;:?!)]|$))"), r"\1 В"),
+    # латиница из технических заданий: «1 GS/s», «15 A», «600V», «90 W», «200 MΩ», «200 ps»; «450°», «450 С»
+    (re.compile(r"(\d)\s*(?:GS/s|GSa/s|Gsps)", re.I), r"\1 Гвыб/с"),
+    (re.compile(r"(\d)\s*(?:MS/s|MSa/s|Msps)", re.I), r"\1 Мвыб/с"),
+    (re.compile(r"(\d)\s*(?:MOhm|MΩ|Мом)(?![A-Za-zА-Яа-я])"), r"\1 МОм"),
+    (re.compile(r"(\d)\s*(?:kOhm|kΩ|ком)(?![A-Za-zА-Яа-я])"), r"\1 кОм"),
+    (re.compile(r"(\d)\s*(?:Ohm|Ω)(?![A-Za-zА-Яа-я])"), r"\1 Ом"),
+    (re.compile(r"(\d)\s*kW(?![A-Za-zА-Яа-я])"), r"\1 кВт"),
+    (re.compile(r"(\d)\s*VA(?![A-Za-zА-Яа-я])"), r"\1 ВА"),
+    (re.compile(r"(\d)\s*kV(?![A-Za-zА-Яа-я])"), r"\1 кВ"),
+    (re.compile(r"(\d)\s*mV(?![A-Za-zА-Яа-я])"), r"\1 мВ"),
+    (re.compile(r"(\d)\s*(?:uA|µA|μA)(?![A-Za-zА-Яа-я])"), r"\1 мкА"),
+    (re.compile(r"(\d)\s*mA(?![A-Za-zА-Яа-я])"), r"\1 мА"),
+    (re.compile(r"(\d)\s*([AVW])(?![A-Za-zА-Яа-я/])"), lambda m: f"{m.group(1)} {LATIN_UNIT[m.group(2)]}"),
+    (re.compile(r"(\d)\s*ps(?![A-Za-zА-Яа-я])"), r"\1 пс"),
+    (re.compile(r"(\d)\s*ns(?![A-Za-zА-Яа-я])"), r"\1 нс"),
+    (re.compile(r"(\d)\s*kg(?![A-Za-zА-Яа-я])"), r"\1 кг"),
+    (re.compile(r"(\d)\s*°(?!\s*[CСF])"), r"\1 °C"),
+    (re.compile(r"(\d)\s*[CС](?=\s*(?:[,.;:?!)]|$))"), r"\1 °C"),
 ]
 
 
@@ -404,19 +441,25 @@ def _requirements(question: str, kind: str | None) -> list[Req]:
     question = MODEL_TOKEN_RE.sub(" ", question)
     for rx, repl in LOWER_UNITS:
         question = rx.sub(repl, question)
+    # «от 100 до 450 °C» → «от 100 °C до 450 °C»: у диапазона проверяются обе границы
+    question = RANGE_REQ_RE.sub(lambda m: f"от {m.group(1)} {m.group(3)} до {m.group(2)} {m.group(3)}", question)
     reqs = []
     for m in REQ_RE.finditer(question):
         raw_unit = m.group(2)
         unit = "°C" if raw_unit.startswith(("°", "градус")) else raw_unit
-        param = _unit_param(unit, kind, question)
+        before = question[max(0, m.start() - 25):m.start()]
+        param = _unit_param(unit, kind, question, before)
         if param is None or (param == "Масса" and not re.search(PARAMS["Масса"], question, re.I)):
             continue                                            # «в 2026 г.» — год, а не масса
         value = _parse_number(m.group(1)) * UNITS[unit][1]
-        mode = _mode(question[max(0, m.start() - 25):m.start()].lower(), param)
-        reqs.append(Req(param, value, f"{m.group(1)} {raw_unit}", mode))
+        reqs.append(Req(param, value, f"{m.group(1)} {raw_unit}", _mode(before.lower(), param)))
     for m in CHANNELS_RE.finditer(question):
         n = int(m.group(1)) if m.group(1) else WORD_NUM[m.group(2).lower()]
         reqs.append(Req("Число каналов", n, f"{n} каналов", "min"))
+    # «паяльная станция с феном» — нужна модель с феном, даже если температура фена не названа
+    if kind == "Паяльная станция" and re.search(r"\b(?:с|со|и)\s+(?:термо)?фен\w*", question, re.I) \
+            and not any("фена" in r.param for r in reqs):
+        reqs.append(Req("Температура фена", 0.0, "", "has"))
     return reqs
 
 
@@ -484,10 +527,19 @@ def _fits(v: Value, r: Req) -> bool:
         return hi >= r.value
     if r.mode == "lo":
         return lo <= r.value
+    if r.mode == "has":
+        return True                               # значение есть — есть и сама часть (фен)
     return lo <= r.value <= hi
 
 
-REQ_WORDS = {"min": "не менее", "max": "не более", "hi": "до", "lo": "от", "inside": ""}
+REQ_WORDS = {"min": "не менее", "max": "не более", "hi": "до", "lo": "от", "inside": "", "has": "наличие фена"}
+
+
+def req_text(r: Req) -> str:
+    """Требование словами: «полоса пропускания не менее 150 МГц»; у «с феном» — «наличие фена»."""
+    if r.mode == "has":
+        return REQ_WORDS["has"]
+    return f"{r.param.lower()} {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ")
 
 
 def subject(model: str, param: str) -> str:
@@ -577,6 +629,9 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
             ok, known = True, True
             for r in q.reqs:
                 items, st, _ = pick(m, r.param, by, contradicted, decided)
+                if r.mode == "has" and st == "missing":
+                    ok = False                    # у модели в справочнике нет фена
+                    continue
                 if st not in ("ok", "confirmed"):
                     known = False
                     continue
@@ -592,6 +647,8 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
                 rows.append([m, r.param, re.sub(r"\s*\[\d+\]", "", text)])
                 if st not in ("ok", "confirmed"):
                     out.append(f"{r.param.lower()}: {text}")
+                elif r.mode == "has":
+                    out.append(f"фен — есть, {r.param.lower()} {text}")
                 else:
                     out.append(f"{r.param.lower()} — {text}, нужно {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " "))
             return out
@@ -599,7 +656,7 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         fit = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "fit"]
         unfit = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "unfit"]
         unknown = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "unknown"]
-        need = "; ".join(f"{r.param.lower()} {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in q.reqs)
+        need = "; ".join(req_text(r) for r in q.reqs)
         if q.models:
             for m, verdicts in fit + unfit + unknown:
                 state = ("подходит" if (m, verdicts) in fit else "не подходит" if (m, verdicts) in unfit
