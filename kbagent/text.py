@@ -18,6 +18,18 @@ STOPWORDS = set("""
 """.split())
 
 TOKEN_RE = re.compile(r"[a-zа-яё]+|\d+(?:[.,]\d+)*", re.IGNORECASE)
+MD_SPECIAL_RE = re.compile(r"([\\`*\[\]()#!|<>~])")      # «_» внутри слова разметку не включает
+MD_ESCAPED_RE = re.compile(r"\\([\\`*\[\]()#!|<>~])")
+
+
+def md_unescape(text: str) -> str:
+    """Обратно к обычному тексту — для документа Word и журнала."""
+    return MD_ESCAPED_RE.sub(r"\1", text)
+
+
+def md_plain(text: str) -> str:
+    """Текст пользователя (вопрос, имя файла) — для показа через Markdown как есть: без ссылок, картинок, жирного."""
+    return MD_SPECIAL_RE.sub(r"\\\1", text)
 
 
 def normalize(text: str) -> str:

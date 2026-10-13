@@ -8,6 +8,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm, Mm, Pt, RGBColor
 
 from .database import display
+from .text import md_unescape
 
 INLINE_RE = re.compile(r"(\*\*.+?\*\*|~~.+?~~)")
 GRAY = RGBColor(0x5C, 0x54, 0x70)
@@ -27,7 +28,7 @@ def _runs(paragraph, text: str) -> None:
 
 
 def _text(doc, text: str) -> None:
-    for line in text.splitlines():
+    for line in md_unescape(text).splitlines():
         line = line.rstrip()
         if not line.strip():
             continue

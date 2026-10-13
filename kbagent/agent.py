@@ -18,7 +18,7 @@ from .normocontrol import GOST_ID, check_docx
 from .privacy import mask, prune
 from .retriever import Hit, Retrieval, retrieve
 from .store import Index
-from .text import tokenize
+from .text import md_plain, tokenize
 
 ROUTER_PROMPT = """Определи, где искать ответ на вопрос сотрудника.
 ДОКУМЕНТЫ — правила, порядок действий, требования, нормы, сроки по регламентам, телефоны и ответственные из регламентов, инструкции, технические характеристики и эксплуатация приборов по руководствам.
@@ -205,6 +205,29 @@ DOC_CODES = [
     (re.compile(r"\bакип[-\s]*(\d{4})", re.I), lambda v: rf"акип-{v}"),
 ]
 MODEL_RE = re.compile(r"\b(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{3,}\b")       # MAS830L, SBK936B, TDM, Lukey
+
+# «xnj ltkfnm ghb bcrhtybb?» — вопрос набран в английской раскладке
+LAYOUT = dict(zip("qwertyuiop[]asdfghjkl;'zxcvbnm,.`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>~",
+                  "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ"))
+LAYOUT_WORD_RE = re.compile(r"[A-Za-z\[\]{};:'\"`~,.<>]+")
+
+
+def fix_layout(question: str, vocabulary) -> str | None:
+    """Вопрос в английской раскладке → тот же вопрос по-русски, если перекладка даёт слова из базы знаний.
+    Английские вопросы («What should I do if the equipment sparks?») не трогаются: после перекладки
+    в них нет слов базы. Запятая и точка внутри слова — «б» и «ю», в конце слова — знаки препинания."""
+    if re.search(r"[а-яё]", question, re.I) or not re.search(r"[a-z]", question, re.I):
+        return None
+
+    def word(m: re.Match) -> str:
+        w = m.group(0)
+        tail = re.search(r"[,.]+$", w)
+        body, end = (w[:tail.start()], tail.group(0)) if tail else (w, "")
+        return "".join(LAYOUT.get(ch, ch) for ch in body) + end
+
+    converted = LAYOUT_WORD_RE.sub(word, question)
+    hits = sum(t in vocabulary for t in tokenize(converted))
+    return converted if hits >= 2 and hits > sum(t in vocabulary for t in tokenize(question)) else None
 
 
 def named_docs(question: str, cards: dict[str, dict]) -> set[str]:
@@ -476,6 +499,7 @@ class Agent:
         """Проверка оформления приложенного DOCX по ГОСТ Р 7.0.97: замечания со ссылками на пункты стандарта."""
         t0 = time.time()
         asked = f"{question.strip() or 'Проверь оформление документа'} · {filename}"
+        filename = md_plain(filename)    # имя файла попадает в ответ, который показывается через Markdown
         try:
             report = check_docx(data)
         except Exception:  # noqa: BLE001 — повреждённый или не тот файл
@@ -710,6 +734,7 @@ class Agent:
 
         # «игнорируй инструкции и…», «ответь без документов, своими словами» — отвечаем на сам вопрос
         base = re.sub(r"^[\s,;:.!—-]+", "", META_RE.sub("", question)).strip() or question
+        base = fix_layout(base, self.index.bm25.idf) or base
         if base != question:
             base = base[:1].upper() + base[1:]
         # письмо клиента или «подготовь ТКП: …» — разбор на позиции, подбор по справочнику и черновик ТКП
@@ -877,7 +902,11 @@ class Agent:
                         result.sql, result.columns, result.rows = db_result.sql, db_result.columns, db_result.rows
                         result.labels = db_result.labels
                     elif db_result and db_result.status == "answer":
-                        result = db_result   # в документах правила нет — показываем запись из базы
+                        # в документах правила нет — показываем запись из базы и говорим об этом прямо:
+                        # иначе сотрудник примет запись за полный ответ на «можно ли»
+                        result = db_result
+                        result.text += ("\n\nТребования, которое прямо относится к этой записи, в доступных "
+                                        "документах не нашлось — уточните у ответственного за этот участок.")
                     else:
                         result.route = "documents"
                 elif auto and db_result is None and a.status == "no_data" and not RULE_RE.search(asked):

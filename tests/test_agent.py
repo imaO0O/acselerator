@@ -106,3 +106,22 @@ def test_threshold_in_question_is_not_a_batch_size():
     from kbagent import raschety as R
     # «если в партии больше 100 штук» — вопрос о правиле, а не расчёт для партии из 100 штук
     assert R.match("Какой объём выборки при внешнем осмотре ЭРИ, если в партии больше 100 штук?") == []
+
+
+def test_keyboard_layout_is_fixed_only_into_known_words():
+    vocab = {"дела", "искрен", "оборудован", "наряд", "допуск"}
+    fixed = G.fix_layout("xnj ltkfnm ghb bcrhtybb j,jheljdfybz?", {G.tokenize(w)[0] for w in
+                                                                  ["делать", "искрении", "оборудования"]} | vocab)
+    assert fixed == "что делать при искрении оборудования?"
+    # английский вопрос и обозначения моделей не переводятся: после перекладки в них нет слов базы
+    assert G.fix_layout("What should I do if the equipment sparks?", vocab) is None
+    assert G.fix_layout("MAS830L", vocab) is None
+    assert G.fix_layout("Что делать при искрении?", vocab) is None          # уже по-русски
+
+
+def test_user_text_is_shown_without_markdown():
+    from kbagent.text import md_plain, md_unescape
+    raw = "Где лежит флюс? ![x](http://evil/a.png) [жми](http://evil) **срочно** Prikaz_s_oshibkami.docx"
+    shown = md_plain(raw)
+    assert "](" not in shown.replace("\]\(", "") and "\!\[" in shown and "Prikaz_s_oshibkami" in shown
+    assert md_unescape(shown) == raw

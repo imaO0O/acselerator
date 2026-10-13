@@ -110,3 +110,11 @@ def test_count_with_plain_columns_needs_group_by():
 def test_price_questions_do_not_go_to_records(db):
     r = D.answer_from_database("А сколько стоит обед в столовой предприятия?", db)
     assert r.status == "no_data" and not r.sql       # без вызова модели и без запроса к базе
+
+
+def test_total_is_counted_by_program_for_how_many_in_total():
+    cols = ["part_no", "name", "qty", "unit"]
+    rows = [["ЭРИ-1001", "Резистор 10 кОм", 4000, "шт"], ["ЭРИ-1002", "Резистор 1 кОм", 2500, "шт"]]
+    assert D._total_line("Сколько всего резисторов на складе?", cols, rows) == "Всего: 6500 шт (записей: 2)."
+    assert D._total_line("Где лежат резисторы?", cols, rows) == ""                      # не спрашивали сумму
+    assert D._total_line("Сколько всего?", cols, [rows[0], ["ЭРИ-9", "Припой", 12, "кг"]]) == ""   # разные единицы

@@ -13,6 +13,7 @@ from kbagent.actions import log_action
 from kbagent.export import answer_docx, draft_docx, draft_text
 from kbagent.preview import source_path
 from kbagent.ingest import expired_on, registry_info
+from kbagent.text import md_plain
 from kbagent.uploads import KIND_PENDING
 
 # примеры на пустом экране — по аудитории: запросы клиентов о приборах, производство, метрология
@@ -436,14 +437,14 @@ def chat_page() -> None:
         _hero()
     for i, item in enumerate(items):
         with st.chat_message("user", avatar=USER_AVATAR):
-            st.markdown(item["question"])
+            st.markdown(md_plain(item["question"]))
         with st.chat_message("assistant", avatar=LOGO):
             render_answer(item, i)
 
     if not question:
         return
     with st.chat_message("user", avatar=USER_AVATAR):
-        st.markdown(question)
+        st.markdown(md_plain(question))
     with st.chat_message("assistant", avatar=LOGO):
         if attached is None and not health()["llm"]:      # нормоконтролю модель не нужна
             st.error("Сервис ответов временно недоступен. Попробуйте через минуту или сообщите администратору.",

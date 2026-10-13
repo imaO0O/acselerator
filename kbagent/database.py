@@ -548,6 +548,27 @@ RECORD_FIELDS = {"inv_no", "part_no", "id", "name", "model", "qty", "unit", "bat
 NEXT_FIELDS = {"last_check", "check_type", "received", "created_at"}   # для записи по номеру — тоже
 
 
+SUM_Q_RE = re.compile(r"сколько\s+(?:всего|в сумме|суммарно)|\bвсего\s+(?:на складе|штук|единиц)|"
+                      r"общее количество|суммарн\w*\s+количеств|итого", re.I)
+
+
+def _total_line(question: str, columns: list, rows: list) -> str:
+    """«Сколько всего резисторов?» — сумма количества по найденным записям, если единица у всех одна.
+    Складывает программа, а не модель: в подсказке модели складывать запрещено."""
+    if not SUM_Q_RE.search(question) or "qty" not in columns or len(rows) < 2:
+        return ""
+    q = columns.index("qty")
+    units = {r[columns.index("unit")] for r in rows} if "unit" in columns else {None}
+    if len(units) != 1:
+        return ""
+    try:
+        total = sum(float(r[q]) for r in rows)
+    except (TypeError, ValueError):
+        return ""
+    unit = next(iter(units))
+    return f"Всего: {display(total)}{f' {unit}' if unit else ''} (записей: {len(rows)})."
+
+
 def answer_from_database(question: str, db_path: Path, records: list[str] | None = None,
                          near: bool = False) -> DbAnswer:
     """records — номера записей из вопроса «запись + правило» («СИ-0012 просрочен — можно ли…»).
@@ -637,5 +658,7 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
         text = re.sub(r"(?m)^(\s*)1[.)]\s+", r"\1", text).strip()
         text = text[:1].upper() + text[1:]
     text = re.sub(r"[ \t]+([.,;:])", r"\1", re.sub(r"\s*\[БД\]\s*", " ", text)).strip() + " [БД]"
+    if total := _total_line(question, columns, rows):
+        text += f"\n\n{total}"
     return DbAnswer("answer", text, sql=sql, columns=columns, rows=[list(r) for r in rows], stats=stats,
                     labels=labels)
