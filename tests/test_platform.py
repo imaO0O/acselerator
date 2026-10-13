@@ -362,3 +362,25 @@ def test_every_demo_user_has_a_known_role():
     from scripts.make_users import DEMO_USERS
     assert {role for _, _, role, _ in DEMO_USERS} <= set(settings.roles)
     assert "Техпродажи и сервис" in settings.roles and list(settings.roles)[-1] == "Администратор"
+
+
+def test_effect_counts_time_to_approval_and_flags_stale_answers(tmp_settings, tmp_path, monkeypatch):
+    from kbagent import effect, experts
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    monkeypatch.setattr(effect, "PATH", tmp_path / "effect.jsonl")
+    src = [{"doc_id": "osc_akip_4115v", "page": 6}]
+    effect.record("ответ", "u", "Техпродажи и сервис", "Какая частота?", 90, src)
+    effect.record("ответ", "u", "Техпродажи и сервис", "Полоса?", 150, [{"doc_id": "osc_akip_4115v", "page": 7}])
+    effect.record("ТКП", "u", "Техпродажи и сервис", "ТКП: …", 300, [], positions=3)
+    s = effect.summary()
+    assert s["kinds"]["ответ"]["count"] == 2 and s["kinds"]["ответ"]["median_min"] == 2.0
+    assert s["kinds"]["ТКП"]["share"] == 5 / 60 and round(s["saved_hours"], 2) == round((13.5 + 12.5 + 55) / 60, 2)
+    assert not [r for r in effect.affected() if r["question"] == "Какая частота?"]
+    it = experts.add("противоречие в справочнике", "АКИП-4115/1В — Частота дискретизации на канал",
+                     [{"value": "1 Гвыб/с", "doc": "osc_akip_4115v", "page": 63},
+                      {"value": "1 Гц/с", "doc": "osc_akip_4115v", "page": 6}])
+    experts.resolve(it["id"], "Эксперт", "на с. 6 опечатка", {"value": "1 Гвыб/с", "doc": "osc_akip_4115v",
+                                                              "page": 63})
+    stale = [r for r in effect.affected() if r["question"] == "Какая частота?"]
+    assert stale and "эксперт исправил значение" in stale[0]["reasons"][0]
+    assert not [r for r in effect.affected() if r["question"] == "Полоса?"]

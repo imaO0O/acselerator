@@ -8,7 +8,7 @@ from typing import Callable
 
 import yaml
 
-from . import demo_db, llm, raschety, spravochnik
+from . import demo_db, llm, raschety, spravochnik, tkp
 from .answer import answer_from_documents, source_label
 from .cards import build_cards, card_chunk, card_text
 from .config import settings
@@ -637,6 +637,9 @@ class Agent:
                     "Например:")
         elif HELP_RE.search(question):
             text = ("Я ищу ответы во внутренних документах предприятия и в учётной базе:\n\n"
+                    "- подбор продукции по требованиям клиента, «подойдёт ли», сравнение моделей — по справочнику "
+                    "параметров, программой;\n"
+                    "- письмо клиента целиком — разберу на позиции и подготовлю черновик ТКП;\n"
                     "- правила, сроки, порядок действий, требования — по регламентам, инструкциям, ГОСТам, "
                     "руководствам к приборам;\n"
                     "- оборудование, средства измерений, склад и заявки на ремонт — по учётной базе;\n"
@@ -676,6 +679,25 @@ class Agent:
         combined.asked = asked if asked != question else None
         return combined
 
+    def search_baseline(self, question: str, role: str, top: int = 5) -> dict:
+        """Что выдал бы обычный поиск по словам: документы (без ответа) и сколько в них страниц —
+        для сравнения на показе. Без моделей, за миллисекунды."""
+        allowed = settings.roles.get(role, {"all"})
+        if not hasattr(self, "_pages"):
+            pages: dict[str, int] = {}
+            for c in self.index.chunks:
+                pages[c.doc_id] = max(pages.get(c.doc_id, 0), c.page_end or c.page_start or 0)
+            self._pages = pages
+        docs: list[str] = []
+        for i, _ in self.index.search_words(question, allowed, 60):
+            d = self.index.chunks[i].doc_id
+            if d not in docs:
+                docs.append(d)
+            if len(docs) == top:
+                break
+        found = [{"title": self.cards.get(d, {}).get("title", d), "pages": self._pages.get(d, 0)} for d in docs]
+        return {"docs": found, "pages": sum(x["pages"] for x in found)}
+
     def ask(self, question: str, role: str = "Администратор", route: str = "auto",
             history: list[dict] | None = None, on_step: Callable[[str], None] | None = None,
             user: str | None = None, log: bool = True) -> AgentResult:
@@ -690,6 +712,22 @@ class Agent:
         base = re.sub(r"^[\s,;:.!—-]+", "", META_RE.sub("", question)).strip() or question
         if base != question:
             base = base[:1].upper() + base[1:]
+        # письмо клиента или «подготовь ТКП: …» — разбор на позиции, подбор по справочнику и черновик ТКП
+        # программой, без языковой модели; письмо не сокращается и не переписывается
+        if route in ("auto", "spravochnik"):
+            request = tkp.parse(base, allowed)
+            if tkp.is_request(base, request):
+                step("Разбираю запрос клиента…")
+                tkp.notify_experts(request, base[:300], user, role)
+                result = AgentResult(question, role, "tkp", "answer", tkp.answer_text(request),
+                                     sources=request.sources, columns=["n", "kind", "qty", "model", "param", "value",
+                                                                       "verdict"],
+                                     rows=tkp.rows(request), labels=tkp.ROW_LABELS,
+                                     stats={"tkp": request.to_dict(), "expert_ids": request.expert_ids})
+                result.seconds = round(time.time() - t0, 2)
+                if log:
+                    self._log(result, user)
+                return result
         talk = self.small_talk(base, role, allowed)
         if talk is not None:
             talk.seconds = round(time.time() - t0, 2)

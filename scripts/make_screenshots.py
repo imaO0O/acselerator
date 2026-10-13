@@ -4,15 +4,16 @@
     scripts\\start_servers.bat  и  scripts\\run_chat.bat
     python scripts/make_screenshots.py
     python scripts/make_screenshots.py --admin      (только страницы администрирования, кадры 09–11)
-    python scripts/make_screenshots.py --client     (только запросы клиентов о приборах, кадры 14–20)
+    python scripts/make_screenshots.py --client     (только запросы клиентов о приборах, кадры 14–24)
 
 Входит администратором, в режиме показа (без служебных блоков) задаёт вопросы сценария и снимает
 экраны: пустой экран с примерами, ответ со ссылками, окно источника с выделенным фрагментом,
 «запись + правило», ответ по учёту, честный отказ, встречный вопрос, вопрос об агенте, сравнение
 редакций, нормоконтроль приложенного приказа, страницы
 «Пробелы в документации», «Качество» и «Безопасность». С --client входит специалистом техпродаж и снимает
-запросы клиентов о приборах: подбор, черновик ответа, противоречие источников с решением эксперта, сравнение
-моделей, затем администратором — «Вопросы эксперту», реестр документов и справочник. Перед запуском —
+запросы клиентов о приборах: письмо клиента → черновик ТКП и его утверждение, подбор со сравнением
+с обычным поиском, черновик ответа, противоречие источников с решением эксперта и ответ уже с подтверждённым
+значением, сравнение моделей; затем администратором — «Эффект», «Вопросы эксперту», реестр и справочник. Перед запуском —
 python scripts/check_demo.py --clean (чистый список диалогов).
 """
 import argparse
@@ -40,14 +41,12 @@ SHOTS = [   # (файл, вопрос, нажать первую кнопку-и
 NORMO = ("13_normokontrol.png", ROOT / "data" / "show" / "Prikaz_s_oshibkami.docx")
 ADMIN_TABS = [("09_probely.png", "Пробелы в документации"), ("10_kachestvo.png", "Качество"),
               ("11_bezopasnost.png", "Безопасность")]
-CLIENT_SHOTS = [   # (файл, вопрос) — главный сценарий показа П1–П4, роль «Техпродажи и сервис»
-    ("14_podbor.png", "Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?"),
-    ("15_chernovik.png", "Можно ли мультиметром MAS830L измерить ток 15 А?"),
-    ("16_protivorechie.png", "Какая частота дискретизации у АКИП-4115/1В?"),
-    ("17_sravnenie.png", "Чем отличаются АКИП-4122/1(V) и АКИП-4122/10(V)?"),
-]
-CLIENT_ADMIN_TABS = [("18_eksperty.png", "Вопросы эксперту"), ("19_reestr.png", "Документы"),
-                     ("20_spravochnik.png", "Справочник")]
+PODBOR = "Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?"
+MAS = "Можно ли мультиметром MAS830L измерить ток 15 А?"
+DISKR = "Какая частота дискретизации у АКИП-4115/1В?"
+SRAVN = "Чем отличаются АКИП-4122/1(V) и АКИП-4122/10(V)?"
+CLIENT_ADMIN_TABS = [("21_effekt.png", "Эффект"), ("22_eksperty.png", "Вопросы эксперту"),
+                     ("23_reestr.png", "Документы"), ("24_spravochnik.png", "Справочник")]
 
 
 def wait_answer(page) -> None:
@@ -57,7 +56,7 @@ def wait_answer(page) -> None:
         """() => {
             const msgs = document.querySelectorAll('[data-testid=stChatMessage]');
             const last = msgs[msgs.length - 1];
-            return last && /Документы|Учётная база|База и документы|Справочник|Расчёт|Справка|Нормоконтроль/
+            return last && /Документы|Учётная база|База и документы|Справочник|Запрос клиента|Расчёт|Справка|Нормоконтроль/
                 .test(last.innerText)
                 && !document.querySelector('[data-stale=true]') && !document.body.innerText.includes('Ищу ответ');
         }""", timeout=90000)
@@ -126,42 +125,83 @@ def ask(page, question: str) -> None:
     to_question(page)
 
 
+def shot(page, name: str) -> None:
+    page.mouse.move(1900, 700)                 # без всплывающих подсказок у курсора и у кнопки в фокусе
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    time.sleep(2)
+    page.screenshot(path=OUT / name)
+    print(name)
+
+
+def last_message(page):
+    return page.locator("[data-testid=stChatMessage]").last
+
+
+def approve(page, edit: str = "") -> None:
+    """В окне черновика: правка текста сотрудником и «Утвердить и скачать» (файл не сохраняется)."""
+    if edit:
+        box = page.locator("[role=dialog] textarea")
+        box.fill(box.input_value().replace("Добрый день!", edit, 1))
+        time.sleep(1)
+    with page.expect_download():
+        page.locator("[role=dialog]").get_by_role("button", name="Утвердить").click()
+    time.sleep(1.5)
+    page.keyboard.press("Escape")
+    time.sleep(1.5)
+
+
 def client(page) -> None:
-    """Кадры 14–17: запросы клиентов о приборах под ролью «Техпродажи и сервис»."""
+    """Кадры 14–20: главный сценарий показа под ролью «Техпродажи и сервис»."""
     from kbagent import experts
     page.goto(f"{URL}/?show=1")
     page.wait_for_selector("text=Новый диалог", timeout=30000)
-    for name, question in CLIENT_SHOTS:
-        ask(page, question)
-        if name == "15_chernovik.png":            # черновик ответа клиенту: правка и утверждение
-            page.locator("[data-testid=stChatMessage]").last.get_by_role("button", name="Черновик").click()
-            page.wait_for_selector("[role=dialog] textarea", timeout=30000)
-            time.sleep(1.5)
-        if name == "16_protivorechie.png":        # эксперт решил вопрос — решение видно под ответом
-            for it in experts.load():
-                if it["status"] == "открыт" and it["subject"].startswith("АКИП-4115/1В"):
-                    experts.resolve(it["id"], "эксперт технического отдела",
-                                    "верно 1 Гвыб/с (с. 63); на с. 6 опечатка в руководстве")
-            page.mouse.click(1800, 500)             # фокус — не в поле ввода; R — перезапуск страницы Streamlit
-            page.keyboard.press("r")
-            page.wait_for_selector("text=Ответ эксперта", timeout=30000)
-            time.sleep(1.5)
-            to_question(page)
-        page.mouse.move(1900, 700)                 # без всплывающих подсказок у курсора и у кнопки в фокусе
-        page.evaluate("() => document.activeElement && document.activeElement.blur()")
-        time.sleep(2)
-        page.screenshot(path=OUT / name)
-        print(name)
-        if name == "15_chernovik.png":
-            page.keyboard.press("Escape")
-            time.sleep(1)
-            # сотрудник сомневается — передаёт вопрос эксперту (виден в очереди на кадре 18)
-            page.locator("[data-testid=stChatMessage]").last.get_by_role("button", name="Эксперту").click()
-            page.wait_for_selector("[role=dialog] textarea", timeout=30000)
-            page.locator("[role=dialog] textarea").fill("клиент спрашивает, есть ли модификация MAS830L на 20 А")
-            page.locator("[role=dialog]").get_by_role("button", name="Передать").click()
-            page.wait_for_selector("text=решение появится здесь", timeout=30000)
-            time.sleep(1)
+
+    new_dialog(page)                                   # письмо клиента → черновик ТКП
+    page.get_by_role("button", name="Пример: письмо клиента").click()
+    wait_answer(page)
+    to_question(page)
+    shot(page, "14_tkp.png")
+    last_message(page).get_by_role("button", name="Черновик ТКП").click()
+    page.wait_for_selector("[role=dialog] textarea", timeout=30000)
+    time.sleep(1.5)
+    shot(page, "15_tkp_chernovik.png")
+    approve(page, "Добрый день, Иван Петрович!")
+
+    ask(page, PODBOR)                                  # подбор и что выдал бы обычный поиск
+    last_message(page).get_by_text("Обычный поиск выдал бы").click()
+    time.sleep(1.5)
+    shot(page, "16_podbor.png")
+
+    ask(page, MAS)                                     # черновик ответа, утверждение, вопрос эксперту
+    last_message(page).get_by_role("button", name="Черновик").click()
+    page.wait_for_selector("[role=dialog] textarea", timeout=30000)
+    time.sleep(1.5)
+    shot(page, "17_chernovik.png")
+    approve(page)
+    last_message(page).get_by_role("button", name="Эксперту").click()
+    page.wait_for_selector("[role=dialog] textarea", timeout=30000)
+    page.locator("[role=dialog] textarea").fill("клиент спрашивает, есть ли модификация MAS830L на 20 А")
+    page.locator("[role=dialog]").get_by_role("button", name="Передать").click()
+    page.wait_for_selector("text=решение появится здесь", timeout=30000)
+    time.sleep(1)
+
+    ask(page, DISKR)                                   # противоречие → эксперт выбрал верное значение
+    for it in experts.load():
+        if it["status"] == "открыт" and it["subject"].startswith("АКИП-4115/1В"):
+            right = next(d for d in it["details"] if d["value"].startswith("1 Гвыб"))
+            experts.resolve(it["id"], "эксперт технического отдела", "на с. 6 опечатка в руководстве", right)
+    page.mouse.click(1800, 500)                        # фокус — не в поле ввода; R — перезапуск страницы Streamlit
+    page.keyboard.press("r")
+    page.wait_for_selector("text=Ответ эксперта", timeout=30000)
+    time.sleep(1.5)
+    to_question(page)
+    shot(page, "18_protivorechie.png")
+
+    ask(page, DISKR)                                   # тот же вопрос позже — уже подтверждённое значение
+    shot(page, "19_podtverzhdeno.png")
+
+    ask(page, SRAVN)
+    shot(page, "20_sravnenie.png")
 
 
 def login(browser, who: str):

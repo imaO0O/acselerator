@@ -106,6 +106,10 @@ def main():
     args = ap.parse_args()
     if args.threshold is not None:
         settings.rerank_threshold = args.threshold
+    # решения эксперта с показа и тренировок не должны менять эталонные ответы — у прогона своя очередь
+    import tempfile
+    from kbagent import experts
+    experts.PATH = Path(tempfile.mkdtemp()) / "experts.json"
 
     if settings.db_path == demo_db.DB:
         demo_db.ensure_current()

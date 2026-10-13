@@ -21,7 +21,8 @@ USER_AVATAR = ":material/person:"
 ACCESS_LABELS = {"all": "Все сотрудники", "production": "Производство", "metrology": "Метрология",
                  "admin": "Только администратор", "archive": "Архив (отменён)"}
 ROUTE_LABELS = {"documents": "Документы", "database": "Учётная база", "both": "База и документы",
-                "help": "Справка", "normo": "Нормоконтроль", "spravochnik": "Справочник параметров"}
+                "help": "Справка", "normo": "Нормоконтроль", "spravochnik": "Справочник параметров",
+                "tkp": "Запрос клиента"}
 STATUS_LABELS = {"answer": "Ответ", "no_data": "Нет в источниках", "model_refused": "Нет в найденном",
                  "unverified": "Не подтверждено", "clarify": "Уточнение", "info": "Справка", "error": "Ошибка"}
 
@@ -32,6 +33,7 @@ BADGES = {
     "both": ("Учётная база и документы", "violet", ":material/join:"),
     "normo": ("Нормоконтроль по ГОСТ Р 7.0.97", "green", ":material/fact_check:"),
     "spravochnik": ("Ответ по справочнику параметров", "blue", ":material/tune:"),
+    "tkp": ("Запрос клиента → черновик ТКП", "orange", ":material/request_quote:"),
     "no_data": ("Ответа в источниках нет", "gray", ":material/search_off:"),
     "model_refused": ("Ответа в найденном нет", "gray", ":material/search_off:"),
     "unverified": ("Ответ не подтверждён ссылкой", "orange", ":material/warning:"),

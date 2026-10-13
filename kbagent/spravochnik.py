@@ -460,10 +460,37 @@ def _fits(v: Value, r: Req) -> bool:
 REQ_WORDS = {"min": "не менее", "max": "не более", "hi": "до", "lo": "от", "inside": ""}
 
 
+def subject(model: str, param: str) -> str:
+    return f"{model} — {param}"
+
+
+def pick(model: str, param: str, by: dict, contradicted: set, decided: dict) -> tuple[list[Value], str, dict | None]:
+    """Значения параметра модели и их состояние: ok; missing — нет данных; contradiction — источники расходятся,
+    решения нет; confirmed — эксперт выбрал верное значение; noted — эксперт решил текстом, оба значения остаются."""
+    items = by.get((model, param), [])
+    if not items:
+        return [], "missing", None
+    if (model, param) not in contradicted:
+        return items, "ok", None
+    d = decided.get(subject(model, param))
+    if d is None:
+        return items, "contradiction", None
+    ch = d.get("chosen") or {}
+    chosen = [v for v in items if v.shown() == ch.get("value") and v.doc == ch.get("doc") and v.page == ch.get("page")]
+    return (chosen, "confirmed", d) if chosen else (items, "noted", d)
+
+
+def confirmed_note(d: dict) -> str:
+    day = d.get("resolved_at", "")[:10]
+    return f"подтверждено экспертом {day[8:10]}.{day[5:7]}.{day[:4]}" if day else "подтверждено экспертом"
+
+
 def answer(q: Query, allowed: set[str], question: str = "", user: str | None = None,
            role: str | None = None) -> SprAnswer | None:
+    from .experts import decisions
     from .ingest import access_of, load_catalog, registry_suffix
     values, rep = load()
+    decided = decisions()
     catalog = load_catalog(settings.raw_dir)
     # роль проверяется до ответа: значения из документов, закрытых для роли, не показываются
     values = [v for v in values if access_of(catalog.get(v.doc, {})) in allowed]
@@ -494,13 +521,22 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         params = list(dict.fromkeys(params + [v.param for v in values if v.model in q.models]))
     rows, lines, experts = [], [], []
 
+    confirmed = []
+
     def cell(model: str, param: str) -> tuple[str, list[Value]]:
-        items = by.get((model, param), [])
-        if not items:
+        items, state, d = pick(model, param, by, contradicted, decided)
+        if state == "missing":
             return "нет данных", []
-        if (model, param) in contradicted:
+        if state == "contradiction":
             experts.append((model, param, items))
             return "; ".join(f"{v.shown()} {ref(v)}" for v in items), items
+        if state == "noted":
+            confirmed.append(f"{model}, {param.lower()}: решение эксперта — {d.get('note') or 'оба значения верны'}")
+            return "; ".join(f"{v.shown()} {ref(v)}" for v in items), items
+        if state == "confirmed":
+            confirmed.append(f"{model}, {param.lower()}: {items[0].shown()} — {confirmed_note(d)}"
+                             + (f" ({d['note']})" if d.get("note") else ""))
+            return f"{items[0].shown()} {ref(items[0])} ({confirmed_note(d)})", items
         return f"{items[0].shown()} {ref(items[0])}", items
 
     if q.reqs:
@@ -510,8 +546,8 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         for m in models:
             ok, known = True, True
             for r in q.reqs:
-                items = by.get((m, r.param), [])
-                if not items or (m, r.param) in contradicted:
+                items, st, _ = pick(m, r.param, by, contradicted, decided)
+                if st not in ("ok", "confirmed"):
                     known = False
                     continue
                 ok = ok and _fits(items[0], r)
@@ -521,10 +557,10 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         def verdicts(m: str) -> list[str]:
             out = []
             for r in q.reqs:
-                items = by.get((m, r.param), [])
+                items, st, _ = pick(m, r.param, by, contradicted, decided)
                 text, _ = cell(m, r.param)
                 rows.append([m, r.param, re.sub(r"\s*\[\d+\]", "", text)])
-                if not items or (m, r.param) in contradicted:
+                if st not in ("ok", "confirmed"):
                     out.append(f"{r.param.lower()}: {text}")
                 else:
                     out.append(f"{r.param.lower()} — {text}, нужно {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " "))
@@ -574,10 +610,13 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         # сравнение моделей: какие параметры различаются, какие совпадают
         same, diff = [], []
         for p in params:
-            shown = {by[(m, p)][0].shown() if by.get((m, p)) else "нет данных" for m in models}
+            firsts = [(pick(m, p, by, contradicted, decided)[0] or [None])[0] for m in models]
+            shown = {v.shown() if v else "нет данных" for v in firsts}
             (same if len(shown) == 1 and "нет данных" not in shown else diff).append(p.lower())
         lines.append("\nРазличаются: " + (", ".join(diff) or "—") + ". Совпадают: " + (", ".join(same) or "—") + ".")
     expert_ids = []
+    if confirmed:
+        lines.append("\n**Решения эксперта:** " + "; ".join(dict.fromkeys(confirmed)) + ".")
     if experts:
         lines.append("\n**Источники расходятся** — вывод не делаю, вопрос передан эксперту:")
         unique = {(m, p): items for m, p, items in experts}

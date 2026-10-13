@@ -17,7 +17,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import experts, spravochnik
+from kbagent import effect, experts, spravochnik
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -331,15 +331,80 @@ def expert_queue() -> None:
             if it.get("comment"):
                 st.caption(f"Что вызывает сомнение: {it['comment']}")
             if it["status"] == "открыт":
+                chosen = None
+                if isinstance(it["details"], list) and len(it["details"]) > 1:
+                    options = list(range(len(it["details"]))) + [None]
+                    pick = st.radio(
+                        "Какое значение верное", options, key=f"exp-pick-{it['id']}", horizontal=True,
+                        index=len(options) - 1,          # выбор значения — только явным нажатием эксперта
+                        format_func=lambda k, d=it["details"]: "оба верны / решение текстом" if k is None else
+                        f"{d[k]['value']} (с. {d[k]['page']})",
+                        help="Выбранным значением агент дальше отвечает сам, с пометкой «подтверждено экспертом»; "
+                             "ответы клиентам, утверждённые с другим значением, попадут в «Эффект» на перепроверку")
+                    chosen = it["details"][pick] if pick is not None else None
                 note = st.text_input("Решение эксперта", key=f"exp-note-{it['id']}",
                                      placeholder="например: верно 1 Гвыб/с, в таблице на с. 6 опечатка")
                 if st.button("Решено", key=f"exp-ok-{it['id']}", icon=":material/check:"):
-                    experts.resolve(it["id"], ctx()["name"], note)
-                    log_action("expert", ctx()["login"], it["subject"], note)
+                    experts.resolve(it["id"], ctx()["name"], note, chosen)
+                    log_action("expert", ctx()["login"], it["subject"],
+                               (f"верно: {chosen['value']}; " if chosen else "") + note)
                     st.rerun()
             else:
+                if it.get("chosen"):
+                    st.caption(f"Верное значение: {it['chosen']['value']} (с. {it['chosen']['page']}) — дальше агент "
+                               "отвечает им сам, с пометкой «подтверждено экспертом»")
                 st.caption(f"Решил {it.get('resolved_by') or '—'} {display(it.get('resolved_at', ''))[:16]}: "
                            f"{it.get('note') or '—'}")
+
+
+def effect_tab() -> None:
+    """Польза в цифрах: время от вопроса до утверждённого ответа или ТКП против ручной подготовки."""
+    summary = effect.summary()
+    records = effect.load()
+    st.caption("Мерило партнёра — время подготовки проверенного ответа (цель — минус 50 %). Агент сам замеряет "
+               "время от вопроса до утверждения сотрудником. Ручное время — оценка до замера: 15 мин на ответ, "
+               "60 мин на ТКП (`docs/pilot/zamer_i_stoimost.md`); после замера на запросах партнёра заменяется "
+               "измеренным.")
+    kinds = summary["kinds"]
+    c = st.columns(4)
+    total = sum(k["count"] for k in kinds.values())
+    c[0].metric("Утверждено ответов и ТКП", total)
+    answers, offers = kinds.get("ответ"), kinds.get("ТКП")
+    fmt = lambda m: f"{m * 60:.0f} с" if m < 1 else f"{m:.1f}".replace(".", ",") + " мин"  # noqa: E731
+    for col, title, k in ((c[1], "Ответ клиенту, медиана", answers), (c[2], "ТКП, медиана", offers)):
+        col.metric(title, fmt(k["median_min"]) if k else "—",
+                   delta=f"вручную — {k['baseline_min']} мин (оценка)" if k else None, delta_color="off",
+                   delta_arrow="off",
+                   help=f"Цель партнёра — не более {k['baseline_min'] / 2:g} мин (минус 50 %)".replace(".", ",")
+                   if k else None)
+    c[3].metric("Сэкономлено (оценка)", f"{summary['saved_hours']:.1f} ч".replace(".", ","),
+                help=f"≈ {summary['saved_rub']:,} ₽ при {effect.HOUR_COST} ₽ за час инженера".replace(",", " "))
+    items = experts.load()
+    done = [x for x in items if x["status"] == "решён"]
+    c = st.columns(4)
+    c[0].metric("Вопросов эксперту", len(items))
+    c[1].metric("Решено экспертом", len(done))
+    c[2].metric("Значений подтверждено экспертом", sum(1 for x in done if x.get("chosen")),
+                help="Дальше агент отвечает этими значениями сам — эксперту тот же вопрос не задают")
+    stale = effect.affected(records)
+    c[3].metric("Ответов на перепроверку", len(stale),
+                help="Источник изменился после утверждения: новая редакция, истёк срок, эксперт исправил значение")
+    if stale:
+        st.warning("Ответы клиентам, которые нужно перепроверить — их источники изменились:",
+                   icon=":material/sync_problem:")
+        st.dataframe(pd.DataFrame([{"Когда": display(r["time"])[:16], "Что": r["kind"], "Сотрудник": r["user"],
+                                    "Вопрос": r["question"][:90], "Почему": "; ".join(r["reasons"])}
+                                   for r in reversed(stale)]), hide_index=True, use_container_width=True)
+    if records:
+        st.markdown("**Утверждённые ответы и ТКП**")
+        st.dataframe(pd.DataFrame([{"Когда": display(r["time"])[:16], "Что": r["kind"], "Сотрудник": r["user"],
+                                    "Вопрос": r["question"][:90],
+                                    "От вопроса до утверждения": fmt(r["seconds"] / 60),
+                                    "Позиций": r.get("positions") or "—"} for r in reversed(records)]),
+                     hide_index=True, use_container_width=True)
+    else:
+        st.info("Пока ничего не утверждено: кнопка «Черновик» или «Черновик ТКП» под ответом в чате → "
+                "«Утвердить и скачать».")
 
 
 def _report(path) -> dict | None:
@@ -416,23 +481,25 @@ def admin_page() -> None:
         st.error("Раздел доступен только администратору.")
         return
     st.markdown("### Администрирование")
-    tabs = st.tabs(["Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Справочник",
+    tabs = st.tabs(["Эффект", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Справочник",
                     "Вопросы эксперту", "Качество", "Безопасность", "Система"])
     with tabs[0]:
-        journal()
+        effect_tab()
     with tabs[1]:
-        gaps()
+        journal()
     with tabs[2]:
-        feedback()
+        gaps()
     with tabs[3]:
-        docs()
+        feedback()
     with tabs[4]:
-        reference()
+        docs()
     with tabs[5]:
-        expert_queue()
+        reference()
     with tabs[6]:
-        quality()
+        expert_queue()
     with tabs[7]:
-        security()
+        quality()
     with tabs[8]:
+        security()
+    with tabs[9]:
         system()

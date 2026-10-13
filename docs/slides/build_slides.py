@@ -336,13 +336,13 @@ def draw_architecture(slide):
     # справочник параметров: значение, единица и источник; подбор, сравнение и расчёт — программой
     px = rx + 5.95
     pw = jx - 0.25 - px
-    box(px, Y3, pw, H3, "Справочник параметров", "значение · единица · источник; подбор и расчёт — программой, "
-        "без модели", fill_color=WHITE, border=ORANGE, name="Справочник")
+    box(px, Y3, pw, H3, "Справочник параметров", "значение · единица · источник; подбор, ТКП, "
+        "расчёт — без модели", fill_color=WHITE, border=ORANGE, name="Справочник")
     turn = Y3 - 0.13
     line(rx + rw - 0.25, Y2 + H2, rx + rw - 0.25, turn)
     line(rx + rw - 0.25, turn, px + pw / 2, turn)
     arrow(px + pw / 2, turn, px + pw / 2, Y3)
-    caption(px + 0.05, turn - 0.25, pw, "вопрос о параметрах продукции", bold=False)
+    caption(px + 0.05, turn - 0.25, pw, "вопрос о продукции или письмо клиента", bold=False)
     arrow(px + pw, Y3 + H3 / 2, jx, Y3 + H3 / 2)
 
     YF, HF = 6.12, 0.82

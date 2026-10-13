@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
-from kbagent import auth, experts
+from kbagent import auth, effect, experts, tkp
 from kbagent.database import column_label, display
 from kbagent.actions import log_action
 from kbagent.export import answer_docx, draft_docx, draft_text
@@ -16,6 +16,9 @@ from kbagent.ingest import expired_on, registry_info
 from kbagent.uploads import KIND_PENDING
 
 # примеры на пустом экране — по аудитории: запросы клиентов о приборах, производство, метрология
+TKP_EXAMPLE = ("Подготовь ТКП по письму клиента: «Просим предложить 2 осциллографа с полосой не менее 150 МГц "
+               "и 4 каналами, мультиметр для измерения тока до 15 А — 3 шт., паяльную станцию для пайки при "
+               "450 °C и источник питания 30 В»")
 CLIENT_EXAMPLES = [
     "Клиенту нужен осциллограф с полосой не менее 150 МГц и 4 каналами — что предложить?",
     "Можно ли мультиметром MAS830L измерить ток 15 А?",
@@ -184,8 +187,14 @@ def _approve_draft(i: int, key: str) -> None:
     item = _conv()["items"][i]
     item["draft"] = st.session_state.get(key) or item.get("draft", "")
     item["draft_approved"] = {"by": ctx()["name"], "at": time.strftime("%d.%m.%Y %H:%M")}
-    log_action("draft_approved", ctx()["login"], item["question"][:120],
-               f"источников: {sum(1 for s in item.get('sources', []) if s.get('cited'))}")
+    cited = [s for s in item.get("sources", []) if s.get("cited")]
+    kind = "ТКП" if item.get("tkp") else "ответ"
+    if not item.get("effect_id"):          # повторное скачивание того же черновика — не новый результат
+        item["effect_id"] = effect.record(kind, ctx()["login"], item["role"], item["question"],
+                                          time.time() - item.get("ts", time.time()), cited,
+                                          len((item.get("tkp") or {}).get("positions", [])))
+    log_action("tkp_approved" if item.get("tkp") else "draft_approved", ctx()["login"], item["question"][:120],
+               f"источников: {len(cited)}")
     _save()
 
 
@@ -193,15 +202,35 @@ def _approve_draft(i: int, key: str) -> None:
 def draft_dialog(i: int, uid: str) -> None:
     """Черновик ответа клиенту или коллеге. Автоматической отправки нет: сотрудник проверяет источники,
     правит текст и утверждает — утверждение записывается в журнал действий."""
+    _draft_body(i, uid)
+
+
+@st.dialog("Черновик ТКП", width="large")
+def tkp_dialog(i: int, uid: str) -> None:
+    """ТКП по запросу клиента: сопроводительное письмо правится здесь, таблица позиций — из справочника."""
+    _draft_body(i, uid)
+
+
+def _draft_body(i: int, uid: str) -> None:
     item = _conv()["items"][i]
-    st.caption("Проверьте текст и источники — ссылки под ответом в чате открывают страницу с выделенным фрагментом. "
-               "Ничего не отправляется автоматически.")
+    data = item.get("tkp")
+    if data:
+        st.caption("Сопроводительное письмо к ТКП. Позиции, характеристики и соответствие требованиям — в таблице "
+                   "документа Word, они взяты из справочника параметров со ссылками на руководства; цены и сроки "
+                   "впишите в Word. Ничего не отправляется автоматически.")
+    else:
+        st.caption("Проверьте текст и источники — ссылки под ответом в чате открывают страницу с выделенным "
+                   "фрагментом. Ничего не отправляется автоматически.")
     key = f"draft-{uid}"
-    text = st.text_area("Текст", value=item.get("draft") or draft_text(item, ctx()["name"]), height=360, key=key,
+    default = tkp.draft_text(data, ctx()["name"]) if data else draft_text(item, ctx()["name"])
+    text = st.text_area("Текст", value=item.get("draft") or default, height=360, key=key,
                         label_visibility="collapsed")
     when = time.strftime("%d.%m.%Y %H:%M")
-    st.download_button("Утвердить и скачать Word", data=draft_docx(text, item, ctx()["name"], when, APP_NAME),
-                       file_name=f"chernovik-{i + 1}.docx", type="primary", icon=":material/task_alt:",
+    doc = (tkp.tkp_docx(text, data, ctx()["name"], when, APP_NAME) if data
+           else draft_docx(text, item, ctx()["name"], when, APP_NAME))
+    st.download_button("Утвердить и скачать ТКП в Word" if data else "Утвердить и скачать Word", data=doc,
+                       file_name=f"tkp-{i + 1}.docx" if data else f"chernovik-{i + 1}.docx", type="primary",
+                       icon=":material/task_alt:",
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                        on_click=_approve_draft, args=(i, key), key=f"draft-ok-{uid}")
 
@@ -292,6 +321,15 @@ def render_answer(item: dict, i: int) -> None:
             with st.expander("Запрос к учётной базе"):
                 st.code(item["sql"], language="sql")
 
+    base = item.get("baseline")
+    if base and base.get("docs") and item["status"] == "answer":
+        pages = f", {base['pages']} стр." if base.get("pages") else ""
+        with st.expander(f"Обычный поиск выдал бы: документов — {len(base['docs'])}{pages}; ответ пришлось бы "
+                         "искать и сверять вручную", icon=":material/manage_search:"):
+            st.caption("Поиск по словам без агента — список документов, а не ответ:")
+            for d in base["docs"]:
+                st.caption(f"- {d['title']}" + (f" — {d['pages']} стр." if d.get("pages") else ""))
+
     if cited:
         with st.container(key=f"sources-{uid}"):
             st.caption("Источники — нажмите, чтобы открыть фрагмент в документе")
@@ -322,16 +360,23 @@ def render_answer(item: dict, i: int) -> None:
                 st.feedback("thumbs", key=f"fb-{uid}", on_change=_on_feedback, args=(i, f"fb-{uid}"))
             else:
                 st.caption("Оценка: " + ("👍" if item["feedback"] == 1 else "👎"))
-    if item["status"] == "answer" and draft.button("Черновик", key=f"dr-{uid}", icon=":material/edit_note:",
-                                                   type="tertiary", help="Черновик ответа клиенту или коллеге: "
-                                                   "правка текста и утверждение сотрудником"):
-        draft_dialog(i, uid)
+    if item["status"] == "answer" and draft.button(
+            "Черновик ТКП" if item.get("tkp") else "Черновик", key=f"dr-{uid}", icon=":material/edit_note:",
+            type="tertiary", help="Черновик ответа клиенту или коллеге (по запросу клиента — ТКП в Word): "
+                                  "правка текста и утверждение сотрудником"):
+        (tkp_dialog if item.get("tkp") else draft_dialog)(i, uid)
     if item["status"] not in ("error", "info") and expert.button(
             "Эксперту", key=f"xp-{uid}", icon=":material/support_agent:", type="tertiary",
             help="Сомневаетесь в ответе или источники расходятся — передать вопрос эксперту"):
         expert_dialog(i, uid)
     if item.get("draft_approved"):
-        st.caption(f"Черновик утверждён: {item['draft_approved']['by']}, {item['draft_approved']['at']}")
+        st.caption(f"{'ТКП' if item.get('tkp') else 'Черновик'} утверждён: {item['draft_approved']['by']}, "
+                   f"{item['draft_approved']['at']}")
+        stale = next((r for r in effect.affected() if r["id"] == item.get("effect_id")), None) \
+            if item.get("effect_id") else None
+        if stale:
+            st.warning("После утверждения изменились источники — перепроверьте ответ клиенту: "
+                       + "; ".join(stale["reasons"]), icon=":material/sync_problem:")
     for eid in item.get("expert_ids", []):
         it = experts.get(eid)
         if it and it["status"] == "решён":
@@ -355,9 +400,13 @@ def _hero() -> None:
     st.image(LOGO, width=52)
     st.markdown(f"### {APP_NAME}")
     st.markdown("Отвечаю по документации, справочнику параметров продукции и данным учёта — со ссылкой "
-                "на документ, пункт и страницу. Подбираю приборы по требованиям клиента и готовлю черновик ответа, "
-                "который утверждаете вы. Если ответа в источниках нет, так и скажу.")
+                "на документ, пункт и страницу. Подбираю приборы по требованиям клиента, по письму клиента готовлю "
+                "черновик ТКП — утверждаете вы. Если ответа в источниках нет, так и скажу.")
     st.caption("Приложите к сообщению документ Word (скрепка в поле ввода) — проверю оформление по ГОСТ Р 7.0.97.")
+    if ctx()["role"] not in EXAMPLES:          # запросы клиентов: главный сценарий — письмо → ТКП
+        if st.button("Пример: письмо клиента → черновик ТКП", icon=":material/request_quote:", type="primary"):
+            st.session_state.pending = TKP_EXAMPLE
+            st.rerun()
     st.caption("Например:")
     cols = st.columns(2)
     for k, q in enumerate(EXAMPLES.get(ctx()["role"], CLIENT_EXAMPLES)):
@@ -374,8 +423,8 @@ def chat_page() -> None:
     conv = _conv()
     items = conv["items"]
 
-    sent = st.chat_input("Спросите о продукции, документах или данных учёта — или приложите документ Word "
-                         "для нормоконтроля", accept_file=True, file_type=["docx"])
+    sent = st.chat_input("Спросите о продукции, документах или учёте, вставьте письмо клиента — или приложите "
+                         "документ Word для нормоконтроля", accept_file=True, file_type=["docx"])
     attached = sent.files[0] if sent and sent.files else None
     question = (sent.text if sent else None) or st.session_state.pop("pending", None)
     if attached is not None:
@@ -414,7 +463,9 @@ def chat_page() -> None:
         item = {"question": question, "asked": r.asked, "role": ctx()["role"], "route": r.route,
                 "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,
                 "labels": r.labels, "rows": r.rows, "seconds": r.seconds, "options": r.options,
-                "expert_ids": list(r.stats.get("expert_ids", [])),
+                "expert_ids": list(r.stats.get("expert_ids", [])), "tkp": r.stats.get("tkp"),
+                "baseline": (get_agent().search_baseline(r.asked or question, ctx()["role"])
+                             if r.status == "answer" and r.route not in ("help", "normo") else None),
                 "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
         items.append(item)
         _save()
