@@ -51,6 +51,7 @@ class Index:
         self.vectors = vectors
         self.bm25 = BM25([tokenize(c.search_text) for c in chunks])
         self.access = np.array([c.access for c in chunks])
+        self.stamp: int | None = None           # отметка индекса на диске, с которой совпадает этот в памяти
 
     # ---------- построение и загрузка ----------
 
@@ -74,6 +75,16 @@ class Index:
         meta = {"chunks": len(self.chunks), "documents": len({c.doc_id for c in self.chunks}),
                 "built": time.strftime("%Y-%m-%d %H:%M"), "embedding_model": "bge-m3"}
         (index_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.stamp = Index.disk_stamp(index_dir)
+
+    @staticmethod
+    def disk_stamp(index_dir: Path) -> int | None:
+        """Отметка сохранённого индекса: meta.json пишется последним — по ней видно, что индекс на диске
+        изменил другой процесс (загрузка или утверждение документа в чате, а ответы идут через API)."""
+        try:
+            return (index_dir / "meta.json").stat().st_mtime_ns
+        except OSError:
+            return None
 
     def _rebuild_word_index(self) -> None:
         self.bm25 = BM25([tokenize(c.search_text) for c in self.chunks])
@@ -123,9 +134,12 @@ class Index:
 
     @classmethod
     def load(cls, index_dir: Path) -> "Index":
+        stamp = cls.disk_stamp(index_dir)
         with open(index_dir / "chunks.jsonl", encoding="utf-8") as f:
             chunks = [Chunk(**json.loads(line)) for line in f]
-        return cls(chunks, np.load(index_dir / "vectors.npy"))
+        index = cls(chunks, np.load(index_dir / "vectors.npy"))
+        index.stamp = stamp
+        return index
 
     # ---------- поиск ----------
 

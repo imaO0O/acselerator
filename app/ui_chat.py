@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
-from kbagent import auth, effect, experts, tkp
+from kbagent import auth, effect, experts, llm, tkp
 from kbagent.database import column_label, display
 from kbagent.actions import log_action
 from kbagent.export import answer_docx, draft_docx, draft_text
@@ -15,6 +15,8 @@ from kbagent.preview import source_path
 from kbagent.ingest import expired_on, registry_info
 from kbagent.text import md_plain
 from kbagent.uploads import KIND_PENDING
+
+MAX_QUESTION_CHARS = 6000
 
 # примеры на пустом экране — по аудитории: запросы клиентов о приборах, производство, метрология
 TKP_EXAMPLE = ("Подготовь ТКП по письму клиента: «Просим предложить 2 осциллографа с полосой не менее 150 МГц "
@@ -425,8 +427,9 @@ def chat_page() -> None:
     conv = _conv()
     items = conv["items"]
 
+    # ограничение длины: письмо клиента на 1–2 страницы помещается, а модель поиска принимает до 4096 токенов
     sent = st.chat_input("Спросите о продукции, документах или учёте; вставьте или приложите письмо клиента — "
-                         "подготовлю ТКП", accept_file=True, file_type=tkp.LETTER_TYPES)
+                         "подготовлю ТКП", accept_file=True, file_type=tkp.LETTER_TYPES, max_chars=MAX_QUESTION_CHARS)
     attached = sent.files[0] if sent and sent.files else None
     question = (sent.text if sent else None) or st.session_state.pop("pending", None)
     typed = (question or "").strip()
@@ -455,14 +458,22 @@ def chat_page() -> None:
         context = [{"question": h.get("asked") or h["question"], "text": h["text"],
                     "docs": [s["doc_id"] for s in h.get("sources", []) if s["cited"]]} for h in items[-3:]]
         holder = st.empty()
-        with holder.status("Читаю приложенный файл…" if attached is not None else "Ищу ответ…") as status:
-            if attached is not None:
-                r = get_agent().attachment(attached.name, attached.getvalue(), role=ctx()["role"], question=typed,
-                                           user=ctx()["login"])
-                question = r.question if " · " in r.question else question
-            else:
-                r = get_agent().ask(question, role=ctx()["role"], route=route, history=context or None,
-                                    user=ctx()["login"], on_step=lambda msg: status.update(label=msg))
+        try:
+            with holder.status("Читаю приложенный файл…" if attached is not None else "Ищу ответ…") as status:
+                if attached is not None:
+                    r = get_agent().attachment(attached.name, attached.getvalue(), role=ctx()["role"], question=typed,
+                                               user=ctx()["login"])
+                    question = r.question if " · " in r.question else question
+                else:
+                    r = get_agent().ask(question, role=ctx()["role"], route=route, history=context or None,
+                                        user=ctx()["login"], on_step=lambda msg: status.update(label=msg))
+        except llm.ModelError:
+            # сервер модели перезапускается или вопрос не уместился — понятное сообщение, а не трассировка ошибки
+            holder.empty()
+            st.error("Не удалось подготовить ответ: сервис ответов временно недоступен или вопрос слишком длинный. "
+                     "Сократите вопрос или повторите через минуту; если не поможет — сообщите администратору.",
+                     icon=":material/cloud_off:")
+            return
         holder.empty()                 # этапы нужны, пока идёт ответ; после — не загромождают диалог
         item = {"question": question, "asked": r.asked, "role": ctx()["role"], "route": r.route,
                 "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,

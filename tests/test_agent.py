@@ -123,5 +123,5 @@ def test_user_text_is_shown_without_markdown():
     from kbagent.text import md_plain, md_unescape
     raw = "Где лежит флюс? ![x](http://evil/a.png) [жми](http://evil) **срочно** Prikaz_s_oshibkami.docx"
     shown = md_plain(raw)
-    assert "](" not in shown.replace("\]\(", "") and "\!\[" in shown and "Prikaz_s_oshibkami" in shown
+    assert "](" not in shown.replace("\\]\\(", "") and "\\!\\[" in shown and "Prikaz_s_oshibkami" in shown
     assert md_unescape(shown) == raw

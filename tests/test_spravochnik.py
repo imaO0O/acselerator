@@ -166,3 +166,64 @@ def test_letter_only_with_unknown_products_is_an_honest_refusal(tmp_path, monkey
     t = tkp.parse(text, {"all"})
     assert tkp.is_request(text, t) and not tkp.has_offer(t)
     assert "нет в справочнике" in tkp.answer_text(t)
+
+
+def _values(tmp_path):
+    f = tmp_path / "s.csv"
+    f.write_text(HEAD +
+                 "X-100;Мультиметр;Постоянный ток, верхний предел;10;А;;doc1;2;10A\n"
+                 "X-100;Мультиметр;Постоянное напряжение, верхний предел;600;В;;doc1;2;600V\n"
+                 "X-200;Осциллограф;Число каналов;2;;;doc1;6;2 канала\n"
+                 "X-200;Осциллограф;Полоса пропускания;100;МГц;;doc1;6;100 МГц\n", encoding="utf-8")
+    return S.parse(f, known_docs={"doc1"})[0]
+
+
+def test_how_to_questions_go_to_documents_not_to_reference(tmp_path):
+    values = _values(tmp_path)
+    # вопрос о значении или требовании — справочник
+    for q in ["Можно ли мультиметром X-100 измерить ток 15 А?", "Какая полоса пропускания у осциллографа X-200?",
+              "Нужен осциллограф от 50 МГц и 2 каналами"]:
+        assert S.understand(q, values) is not None, q
+    # порядок работы, неисправность, меры безопасности, питание — ответ в руководстве, а не таблица параметров
+    for q in ["Как измерить постоянное напряжение мультиметром X-100?",
+              "Как заменить предохранитель на 10 А в мультиметре X-100?",
+              "Что делать, если осциллограф X-200 не показывает сигнал на втором канале?",
+              "Как подключить пробник к каналу осциллографа?",
+              "Почему мультиметр показывает 0 при измерении тока?",
+              "Осциллограф X-200 — какие меры безопасности при измерении высокого напряжения?",
+              "Какое напряжение питания у мультиметра X-100?"]:
+        assert S.understand(q, values) is None, q
+
+
+def test_expert_queue_masks_personal_data(tmp_settings):
+    from kbagent import experts
+    it = experts.add("передал сотрудник", "Иванов Иван Иванович спрашивает про допуск", "—",
+                     "Иванов Иван Иванович, тел. +7 910 123-45-67: где допуск?", comment="звонить Ивановой Анне Петровне")
+    stored = experts.load()[0]
+    for field in ("subject", "question", "comment"):
+        assert "Иван" not in stored[field] and "123-45-67" not in stored[field], (field, stored[field])
+    assert it["id"] == stored["id"]
+
+
+def test_lowercase_units_in_client_letters_are_not_lost(tmp_path):
+    values = _values(tmp_path)
+    q = S.understand("Нужен осциллограф 150 мгц 2 канала", values)
+    assert {(r.param, round(r.value)) for r in q.reqs} == {("Полоса пропускания", 150_000_000), ("Число каналов", 2)}
+    assert [r.param for r in S.understand("Нужен мультиметр X-100 для тока 20 а?", values).reqs] == \
+        ["Постоянный ток, верхний предел"]
+    # «а» и «в» внутри фразы — союз и предлог, а не единицы
+    q = S.understand("Нужен мультиметр X-100 на 20 а также для сопротивления", values)
+    assert q is None or not q.reqs
+
+
+def test_letter_positions_keep_requirements_next_to_service_words(tmp_path, monkeypatch):
+    from kbagent import experts, tkp
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    # в письме «подключение», «обслуживание», «калибровка», «питание» — не вопрос о порядке работы
+    letter = ("Просим КП: 2 осциллографа от 150 МГц на 4 канала с подключением к ПК по USB и гарантийным "
+              "обслуживанием; мультиметр с калибровкой для измерения тока до 15 А с питанием от батареи — 3 шт.")
+    osc, mm = tkp.parse(letter, {"all"}).positions
+    assert (osc.status, osc.model, len(osc.reqs)) == ("offer", "АКИП-4143/1", 2)
+    assert (mm.status, mm.model, mm.qty) == ("offer", "DT9205A", 3)
+    values = _values(tmp_path)
+    assert S.understand("Мультиметр X-100 с питанием от батареи — какое постоянное напряжение измеряет?", values)

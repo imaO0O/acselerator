@@ -312,11 +312,26 @@ def _sources(a) -> list[dict]:
 
 class Agent:
     def __init__(self, index: Index | None = None):
+        self._own_index = index is None          # индекс с диска — перечитывается, если его изменил другой процесс
         self.index = index or Index.load(settings.index_dir)
         self._cards, self._cards_key = {}, None
         prune(settings.log_dir / "audit.jsonl")       # журнал вопросов — не дольше срока хранения
         self._synced = ""
         self._sync_registry()
+
+    def _reload_if_changed(self) -> None:
+        """Чат и API — разные процессы, у каждого свой индекс в памяти. Документ загружен, утверждён или удалён
+        в чате — API должен отвечать уже по новому индексу, а не по отменённой редакции до перезапуска."""
+        if not self._own_index:
+            return
+        disk = Index.disk_stamp(settings.index_dir)
+        if disk is not None and disk != self.index.stamp:
+            try:
+                self.index = Index.load(settings.index_dir)
+            except (OSError, ValueError):
+                return                              # индекс как раз записывается — перечитаем при следующем вопросе
+            self._cards_key = None
+            self._synced = ""
 
     def _sync_registry(self) -> None:
         """Раз в день: доступ документов в индексе — по реестру. Документ, у которого наступила дата
@@ -755,6 +770,7 @@ class Agent:
         step = on_step or (lambda _: None)
         if settings.db_path == demo_db.DB:
             demo_db.ensure_current()      # даты демо-базы — от сегодняшнего дня
+        self._reload_if_changed()
         self._sync_registry()
         allowed = settings.roles.get(role, {"all"})
 
@@ -806,6 +822,8 @@ class Agent:
             if query is not None:
                 step("Сверяю со справочником параметров…")
                 s = spravochnik.answer(query, allowed, question=asked, user=user, role=role)
+                # «нет сведений» справочника — тоже ответ: поиск по руководству на вопрос о параметре, которого
+                # там нет, подменяет предмет («время нарастания» мультиметра → «время обновления дисплея»)
                 if s is not None:
                     result = AgentResult(question, role, "spravochnik", s.status, s.text, sources=s.sources,
                                          columns=s.columns, rows=s.rows, labels=s.labels, stats=s.stats)

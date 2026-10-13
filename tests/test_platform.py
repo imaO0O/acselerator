@@ -384,3 +384,38 @@ def test_effect_counts_time_to_approval_and_flags_stale_answers(tmp_settings, tm
     stale = [r for r in effect.affected() if r["question"] == "Какая частота?"]
     assert stale and "эксперт исправил значение" in stale[0]["reasons"][0]
     assert not [r for r in effect.affected() if r["question"] == "Полоса?"]
+
+
+def test_index_is_reloaded_when_another_process_changed_it(tmp_path, monkeypatch):
+    """Чат загрузил документ — API (другой процесс) отвечает уже по новому индексу, без перезапуска."""
+    import numpy as np
+
+    from kbagent import agent as G
+    from kbagent.config import settings
+    from kbagent.ingest import Chunk
+    from kbagent.store import Index
+    monkeypatch.setattr(settings, "index_dir", tmp_path / "index")
+    monkeypatch.setattr(settings, "log_dir", tmp_path / "logs")
+    c = lambda i, access="all": Chunk(id=f"d{i}#1", doc_id=f"d{i}", doc_title=f"Документ {i}", doc_kind="Регламент",  # noqa: E731
+                                      access=access, clause="1", heading=None, page_start=1, page_end=1, text=f"текст {i}")
+    Index([c(1)], np.ones((1, 4), dtype=np.float32)).save(settings.index_dir)
+    monkeypatch.setattr(G.Agent, "_sync_registry", lambda self: None)
+    api = G.Agent()
+    assert api.index.doc_ids() == {"d1"}
+    import time
+    time.sleep(0.02)
+    Index([c(1), c(2)], np.ones((2, 4), dtype=np.float32)).save(settings.index_dir)   # «чат» сохранил новый индекс
+    api._reload_if_changed()
+    assert api.index.doc_ids() == {"d1", "d2"}
+    before = api.index
+    api._reload_if_changed()                       # ничего не менялось — не перечитывается
+    assert api.index is before
+
+
+def test_effect_log_masks_personal_data(tmp_settings, tmp_path, monkeypatch):
+    from kbagent import effect
+    monkeypatch.setattr(effect, "PATH", tmp_path / "effect.jsonl")
+    effect.record("ТКП", "u", "Техпродажи и сервис", "Просим ТКП на 2 осциллографа. С уважением, Иванов Иван "
+                  "Иванович, тел. +7 910 123-45-67", 300, [], positions=1)
+    q = effect.load()[0]["question"]
+    assert "Иван" not in q and "123-45-67" not in q and "осциллографа" in q

@@ -19,6 +19,7 @@ from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents
                              similar_documents)
 from kbagent import effect, experts, spravochnik
 from kbagent.actions import log_action
+from kbagent.text import md_plain
 
 EVAL_USERS = {None, "", "eval"}
 
@@ -323,13 +324,13 @@ def expert_queue() -> None:
             details = it["details"] if isinstance(it["details"], str) else "; ".join(
                 f"{d.get('value')} — {registry_info(d.get('doc', '')).get('title', d.get('doc'))}, с. {d.get('page')}"
                 for d in it["details"])
-            st.markdown(f"**{it['subject']}** · {it['kind']}  \n:gray[{display(it['time'])[:16]} · обращений: "
+            st.markdown(f"**{md_plain(it['subject'])}** · {it['kind']}  \n:gray[{display(it['time'])[:16]} · обращений: "
                         f"{it.get('asked', 1)} · {it['status']}]")
             st.caption(details if isinstance(it["details"], str) else f"Значения: {details}")
             if it.get("question") and it["question"] != it["subject"]:
-                st.caption(f"Вопрос сотрудника: «{it['question']}»")
+                st.caption(f"Вопрос сотрудника: «{md_plain(it['question'])}»")
             if it.get("comment"):
-                st.caption(f"Что вызывает сомнение: {it['comment']}")
+                st.caption(f"Что вызывает сомнение: {md_plain(it['comment'])}")
             if it["status"] == "открыт":
                 chosen = None
                 if isinstance(it["details"], list) and len(it["details"]) > 1:

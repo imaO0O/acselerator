@@ -238,6 +238,18 @@ GENERIC_ASK = r"характеристик\w*|параметр\w*|техниче
 NOT_PARAM_RE = re.compile(r"окружающ\w*|в\s+помещени\w*|воздух\w*\s+в\s+помещ|хранени\w*|транспортир\w*|"
                           r"влажност\w*", re.I)
 PRICE_RE = re.compile(r"стоит|стоимост\w*|\bцен[аыуе]?\b|прайс", re.I)
+# «как измерить напряжение», «почему не показывает канал», «как заменить предохранитель на 10 А» — вопрос о порядке
+# работы или неисправности, ответ — в руководстве, а не значение параметра из справочника
+PROCEDURE_RE = re.compile(
+    r"^\s*(?:а\s+|и\s+)?(?:как(?:им\s+образом)?|почему|зачем|отчего)\b|что\s+делать|"
+    r"что\s+(?:нужно|необходимо|следует)\s+(?:сделать|делать|проверить)|"
+    r"\bне\s+(?:показыва|работа|включа|измеря|реагиру|нагрева|грее|отобража|видн)\w*|"
+    r"\b(?:ошибк|неисправн|исправност|поломк)\w*|\bмер\w*\s+безопасност\w*|\bтехник\w*\s+безопасност\w*|"
+    r"\b(?:подключ|настро|замен|калибров|откалибр|почист|ремонт|обслуживан|разобр)\w*", re.I)
+# «напряжение питания», «напряжение сети», «напряжение батареи» — питание прибора, а не измерительный предел
+# («мультиметр с питанием от батареи на напряжение до 600 В» — требование к пределу, его не трогаем)
+SUPPLY_RE = re.compile(r"напряжени\w*\s+(?:электро)?питани\w*|напряжени\w*\s+(?:питающей\s+|электрической\s+)?сет[иь]\b|"
+                       r"напряжени\w*\s+(?:\S+\s+)?(?:аккумулятор\w*|батаре\w*|элемент\w*\s+питания)", re.I)
 REQ_RE = re.compile(rf"({NUM})\s*(ГГц|МГц|кГц|Гц|Гвыб/с|Мвыб/с|кВ|мВ|В|мкА|мА|А|МОм|кОм|Ом|°\s?[CС]|градус\w*|"
                     rf"кВт|Вт|ВА|пс|нс|мкс|мс|кг|г)(?![А-Яа-яA-Za-z])")
 CHANNELS_RE = re.compile(r"(\d+)\s*-?\s*(?:х\s*)?канал\w*|(двух|трёх|трех|четырёх|четырех)\s*канальн\w*", re.I)
@@ -376,9 +388,22 @@ def _mode(before: str, param: str) -> str:
     return "max" if param in SMALLER_BETTER else "min"
 
 
+LOWER_UNITS = [   # как пишут в письмах: «150 мгц», «20 а», «1000в» — однозначные варианты к основному написанию
+    (re.compile(r"(\d)\s*(?:ггц|ghz)(?![а-яa-z])", re.I), r"\1 ГГц"),
+    (re.compile(r"(\d)\s*(?:мгц|mhz)(?![а-яa-z])", re.I), r"\1 МГц"),
+    (re.compile(r"(\d)\s*(?:кгц|khz)(?![а-яa-z])", re.I), r"\1 кГц"),
+    (re.compile(r"(\d)\s*вт(?=\s*(?:[,.;:?!)]|$))"), r"\1 Вт"),
+    # одиночные «а» и «в» — только в конце фразы или перед знаком: «20 а?», но не «20 а также», «2 в 1»
+    (re.compile(r"(\d)\s*а(?=\s*(?:[,.;:?!)]|$))"), r"\1 А"),
+    (re.compile(r"(\d)\s*в(?=\s*(?:[,.;:?!)]|$))"), r"\1 В"),
+]
+
+
 def _requirements(question: str, kind: str | None) -> list[Req]:
     """Требования клиента из вопроса. Обозначения моделей вырезаются: «4115/1В» — не «1 В»."""
     question = MODEL_TOKEN_RE.sub(" ", question)
+    for rx, repl in LOWER_UNITS:
+        question = rx.sub(repl, question)
     reqs = []
     for m in REQ_RE.finditer(question):
         raw_unit = m.group(2)
@@ -395,12 +420,14 @@ def _requirements(question: str, kind: str | None) -> list[Req]:
     return reqs
 
 
-def understand(question: str, values: list[Value] | None = None) -> Query | None:
+def understand(question: str, values: list[Value] | None = None, letter: bool = False) -> Query | None:
     """Вопрос к справочнику: названа модель или вид продукции и параметр или требование. Иначе — None
-    («как заменить батарею в MAS830L» — вопрос к документам, а не к справочнику)."""
+    («как заменить батарею в MAS830L» — вопрос к документам, а не к справочнику).
+    letter — позиция письма клиента: «с подключением по USB», «с сервисным обслуживанием» там не вопрос
+    о порядке работы, и требования позиции не теряются."""
     if values is None:
         values = load()[0]
-    if not values or PRICE_RE.search(question):
+    if not values or PRICE_RE.search(question) or (not letter and PROCEDURE_RE.search(question)):
         return None
     models = _find_models(question, values)
     kind = next((k for k, rx in KINDS.items() if re.search(rx, question, re.I)), None)
@@ -422,6 +449,9 @@ def understand(question: str, values: list[Value] | None = None) -> Query | None
                       "Переменное напряжение, верхний предел" if re.search(r"переменн", q, re.I)
                       else "Постоянное напряжение, верхний предел")
     reqs = [] if NOT_PARAM_RE.search(q) else _requirements(q, kind)
+    if SUPPLY_RE.search(q):
+        params = [p for p in params if "напряжени" not in p.lower()]
+        reqs = [r for r in reqs if "напряжени" not in r.param.lower()]
     params += [r.param for r in reqs if r.param not in params]
     # «Чем отличаются A и B?» — сравнение по всем параметрам
     all_params = bool(re.search(GENERIC_ASK, q, re.I)) or (

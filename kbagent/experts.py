@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .config import settings
+from .privacy import mask
 
 
 PATH = None          # другой файл очереди (эталонный прогон не должен видеть решений с показа)
@@ -33,7 +34,10 @@ def _save(items: list[dict]) -> None:
 
 def add(kind: str, subject: str, details: list | str, question: str = "", user: str | None = None,
         role: str | None = None, comment: str = "") -> dict:
-    """Новый вопрос эксперту; если по этой теме уже есть открытый — к нему добавляется ещё одно обращение."""
+    """Новый вопрос эксперту; если по этой теме уже есть открытый — к нему добавляется ещё одно обращение.
+    Тема, вопрос и комментарий хранятся с маскированием персональных данных — как журнал вопросов."""
+    # тема ручного вопроса — сам вопрос сотрудника; у противоречий справочника («модель — параметр») не меняется
+    subject, question, comment = mask(subject) or "", mask(question) or "", mask(comment) or ""
     items = load()
     for it in items:
         if it["subject"] == subject and it["status"] == "открыт":

@@ -8,6 +8,7 @@ import json
 import time
 
 from .config import settings
+from .privacy import mask
 
 ACTIONS = {
     "login": "Вход",
@@ -34,8 +35,9 @@ def _path():
 
 def log_action(action: str, user: str | None, target: str = "", details: str = "") -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
+    # в target и details попадает текст вопроса (передан эксперту, утверждён черновик) — с маскированием
     record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "action": action, "user": user or "—",
-              "target": target, "details": details}
+              "target": mask(target) or "", "details": mask(details) or ""}
     with open(_path(), "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 

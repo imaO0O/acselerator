@@ -180,7 +180,7 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
             pos.status = "not_in_catalog"
             pos.note = "этой продукции нет в справочнике параметров — подбор вручную, вопрос техническому отделу"
             continue
-        q = spr.understand(PRICE_WORDS_RE.sub(" ", seg), values)
+        q = spr.understand(PRICE_WORDS_RE.sub(" ", seg), values, letter=True)
         named = spr._find_models(seg, values)
         reqs = q.reqs if q else []
         pos.reqs = [f"{r.param.lower()} {spr.REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in reqs]

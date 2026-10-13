@@ -14,6 +14,7 @@ import time
 import uuid
 
 from .config import settings
+from .privacy import mask
 
 BASELINE_MIN = {"ответ": 15, "ТКП": 60}     # ручная подготовка, мин — оценка до замера
 HOUR_COST = 630                              # ₽ в час инженера (docs/pilot/zamer_i_stoimost.md)
@@ -26,9 +27,10 @@ def _path():
 
 def record(kind: str, user: str | None, role: str | None, question: str, seconds: float,
            sources: list[dict], positions: int = 0) -> str:
-    """Утверждённый результат: kind — «ответ» или «ТКП»; sources — [{doc_id, page}] процитированных источников."""
+    """Утверждённый результат: kind — «ответ» или «ТКП»; sources — [{doc_id, page}] процитированных источников.
+    Вопрос (часто письмо клиента с подписью и телефоном) хранится с маскированием — как журнал вопросов."""
     rec = {"id": uuid.uuid4().hex[:8], "time": time.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, "user": user,
-           "role": role, "question": question[:300], "seconds": round(max(seconds, 0.0), 1),
+           "role": role, "question": (mask(question) or "")[:300], "seconds": round(max(seconds, 0.0), 1),
            "sources": [{"doc_id": s.get("doc_id"), "page": s.get("page")} for s in sources if s.get("doc_id")],
            "positions": positions}
     settings.log_dir.mkdir(parents=True, exist_ok=True)
