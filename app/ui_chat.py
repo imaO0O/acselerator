@@ -403,7 +403,8 @@ def _hero() -> None:
     st.markdown("Отвечаю по документации, справочнику параметров продукции и данным учёта — со ссылкой "
                 "на документ, пункт и страницу. Подбираю приборы по требованиям клиента, по письму клиента готовлю "
                 "черновик ТКП — утверждаете вы. Если ответа в источниках нет, так и скажу.")
-    st.caption("Приложите к сообщению документ Word (скрепка в поле ввода) — проверю оформление по ГОСТ Р 7.0.97.")
+    st.caption("Скрепка в поле ввода: письмо клиента (Word, PDF, текст, .eml) — подготовлю черновик ТКП; приказ "
+               "или служебная записка в Word — проверю оформление по ГОСТ Р 7.0.97.")
     if ctx()["role"] not in EXAMPLES:          # запросы клиентов: главный сценарий — письмо → ТКП
         if st.button("Пример: письмо клиента → черновик ТКП", icon=":material/request_quote:", type="primary"):
             st.session_state.pending = TKP_EXAMPLE
@@ -424,12 +425,13 @@ def chat_page() -> None:
     conv = _conv()
     items = conv["items"]
 
-    sent = st.chat_input("Спросите о продукции, документах или учёте, вставьте письмо клиента — или приложите "
-                         "документ Word для нормоконтроля", accept_file=True, file_type=["docx"])
+    sent = st.chat_input("Спросите о продукции, документах или учёте; вставьте или приложите письмо клиента — "
+                         "подготовлю ТКП", accept_file=True, file_type=tkp.LETTER_TYPES)
     attached = sent.files[0] if sent and sent.files else None
     question = (sent.text if sent else None) or st.session_state.pop("pending", None)
+    typed = (question or "").strip()
     if attached is not None:
-        question = f"{(question or '').strip() or 'Проверь оформление документа'} · {attached.name}"
+        question = f"{typed or 'Приложенный файл'} · {attached.name}"
     if question and items and items[-1]["question"] == question and time.time() - items[-1].get("ts", 0) < 10:
         question = None          # двойное нажатие — тот же вопрос только что задан
 
@@ -446,17 +448,18 @@ def chat_page() -> None:
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(md_plain(question))
     with st.chat_message("assistant", avatar=LOGO):
-        if attached is None and not health()["llm"]:      # нормоконтролю модель не нужна
+        if attached is None and not health()["llm"]:      # нормоконтролю и ТКП модель не нужна
             st.error("Сервис ответов временно недоступен. Попробуйте через минуту или сообщите администратору.",
                      icon=":material/cloud_off:")
             return
         context = [{"question": h.get("asked") or h["question"], "text": h["text"],
                     "docs": [s["doc_id"] for s in h.get("sources", []) if s["cited"]]} for h in items[-3:]]
         holder = st.empty()
-        with holder.status("Проверяю оформление…" if attached is not None else "Ищу ответ…") as status:
+        with holder.status("Читаю приложенный файл…" if attached is not None else "Ищу ответ…") as status:
             if attached is not None:
-                r = get_agent().normocontrol(attached.name, attached.getvalue(), role=ctx()["role"],
-                                             question=question.rsplit(" · ", 1)[0], user=ctx()["login"])
+                r = get_agent().attachment(attached.name, attached.getvalue(), role=ctx()["role"], question=typed,
+                                           user=ctx()["login"])
+                question = r.question if " · " in r.question else question
             else:
                 r = get_agent().ask(question, role=ctx()["role"], route=route, history=context or None,
                                     user=ctx()["login"], on_step=lambda msg: status.update(label=msg))

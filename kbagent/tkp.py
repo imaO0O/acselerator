@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 
 from . import spravochnik as spr
 
-TKP_WORDS_RE = re.compile(r"\bТКП\b|коммерческ\w*\s+предложени\w*|запрос\w*\s+клиент\w*|письм\w*\s+клиент\w*|"
+TKP_WORDS_RE = re.compile(r"\bТ?КП\b|коммерческ\w*\s+предложени\w*|запрос\w*\s+клиент\w*|письм\w*\s+клиент\w*|"
                           r"заявк\w*\s+клиент\w*|подготов\w*\s+предложени\w*|подбер\w*\s+(?:и\s+)?предлож\w*", re.I)
 # продукция, которой нет в справочнике: позиция есть, но подбирать не по чему — к техническому отделу
 OTHER_RE = re.compile(r"источник\w*\s+питани\w*|блок\w*\s+питани\w*|генератор\w*|частотомер\w*|анализатор\w*|"
@@ -150,7 +150,7 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
     catalog = load_catalog(spr.settings.raw_dir)
     values = [v for v in values if access_of(catalog.get(v.doc, {})) in allowed]
     anchors = _anchors(text, values)
-    if not anchors or not any(k for _, _, k in anchors):
+    if not anchors:
         return None
     contradicted = {(c["model"], c["param"]) for c in rep.contradictions}
     decided = decisions()
@@ -225,6 +225,15 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
                     pending.append((spr.subject(unknown[0], c.param),
                                     [{"value": v.shown(), "doc": v.doc, "page": v.page} for v in items]))
             pos.note = "по части требований нет данных или источники расходятся — нужна проверка эксперта"
+            unfit = [m for m in candidates if state[m] == "unfit"]
+            if unfit:          # модели с известными параметрами не подходят — показать ближайшую
+                closest = min(unfit, key=lambda m: (sum(1 for c in checks[m] if c.ok is False), m))
+                cs = [_check(closest, r.param, r, by, contradicted, decided, ref) for r in reqs]
+                missed = "; ".join(f"{c.param.lower()} {c.value} [{c.ref}] при требовании {c.need}"
+                                   for c in cs if c.ok is False)
+                pos.note = (f"ни одна модель с известными параметрами не подходит (ближайшая — {closest}: {missed}); "
+                            f"у {', '.join(unknown[:3])} нужных данных в справочнике нет или источники расходятся — "
+                            "нужна проверка эксперта")
             continue
         # ни одна модель не подходит — показываем ближайшую и спрашиваем клиента
         closest = min(candidates, key=lambda m: sum(1 for c in checks[m] if c.ok is False))
@@ -272,12 +281,53 @@ def is_request(text: str, tkp: Tkp | None) -> bool:
     """Письмо или заявка клиента, а не обычный вопрос: просят ТКП или предложение; несколько позиций с
     требованиями; длинное письмо. «Клиенту нужен осциллограф от 150 МГц — что предложить?» остаётся вопросом
     к справочнику, «сколько осциллографов и мультиметров на поверке?» — к учётной базе."""
-    if tkp is None or not any(p.status != "not_in_catalog" for p in tkp.positions):
+    if tkp is None:
         return False
     if TKP_WORDS_RE.search(text):
-        return True
+        return True                     # просят ТКП — отвечаем разбором, даже если продукции нет в справочнике
+    if not any(p.status != "not_in_catalog" for p in tkp.positions):
+        return False
     specified = any(p.reqs for p in tkp.positions)
     return specified and (len(tkp.positions) >= 2 or (len(text) > 250 and chr(10) in text.strip()))
+
+
+LETTER_TYPES = ["docx", "pdf", "txt", "eml"]
+NORMO_RE = re.compile(r"оформлени\w*|нормоконтрол\w*|\bГОСТ\b|7\.0\.97", re.I)
+
+
+def letter_text(filename: str, data: bytes) -> str:
+    """Текст письма клиента из приложенного файла: Word, PDF (скан — с распознаванием), текст, письмо .eml."""
+    ext = filename.lower().rsplit(".", 1)[-1]
+    if ext == "txt":
+        for enc in ("utf-8-sig", "cp1251"):
+            try:
+                return data.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return ""
+    if ext == "eml":
+        from email import policy
+        from email.parser import BytesParser
+        msg = BytesParser(policy=policy.default).parsebytes(data)
+        body = msg.get_body(preferencelist=("plain", "html"))
+        text = body.get_content() if body is not None else ""
+        if body is not None and body.get_content_type() == "text/html":
+            text = re.sub(r"<[^>]+>", " ", re.sub(r"(?i)<br\s*/?>|</p>", "\n", text))
+        return f"{msg.get('subject', '')}\n{text}".strip()
+    if ext == "docx":
+        from docx import Document
+        doc = Document(io.BytesIO(data))
+        lines = [p.text for p in doc.paragraphs]
+        for table in doc.tables:
+            lines += [" | ".join(c.text for c in row.cells) for row in table.rows]
+        return "\n".join(lines)
+    if ext == "pdf":
+        import pymupdf
+
+        from .ingest import _page_text
+        with pymupdf.open(stream=data, filetype="pdf") as doc:
+            return "\n".join(_page_text(page, {}) for page in doc)
+    return ""
 
 
 # ---------- текст ответа, черновик письма и ТКП в Word ----------
@@ -294,7 +344,17 @@ def _check_text(c: Check, mark: bool = True) -> str:
     return f"{c.param.lower()} — {c.value or 'нет данных'}{ref}{note}{need}{sign}"
 
 
+def has_offer(t: Tkp) -> bool:
+    """Есть хотя бы одна позиция из справочника — иначе это честный отказ, а не ТКП."""
+    return any(p.status != "not_in_catalog" for p in t.positions)
+
+
 def answer_text(t: Tkp) -> str:
+    if not has_offer(t):
+        kinds = ", ".join(p.kind.lower() for p in t.positions)
+        return (f"Разбор запроса клиента: позиций — {len(t.positions)} ({kinds}), но этой продукции нет в справочнике "
+                "параметров — подобрать модели и подготовить ТКП по проверенным данным не могу. Передайте запрос "
+                "техническому отделу; если продукция есть в ассортименте, её параметры нужно добавить в справочник.")
     offers = sum(1 for p in t.positions if p.status in ("offer", "named"))
     reqs = sum(len(p.reqs) for p in t.positions)
     checked = sum(p.total for p in t.positions)

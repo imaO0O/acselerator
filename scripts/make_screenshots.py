@@ -4,7 +4,7 @@
     scripts\\start_servers.bat  и  scripts\\run_chat.bat
     python scripts/make_screenshots.py
     python scripts/make_screenshots.py --admin      (только страницы администрирования, кадры 09–11)
-    python scripts/make_screenshots.py --client     (только запросы клиентов о приборах, кадры 14–24)
+    python scripts/make_screenshots.py --client     (только запросы клиентов о приборах, кадры 14–24 и 26)
 
 Входит администратором, в режиме показа (без служебных блоков) задаёт вопросы сценария и снимает
 экраны: пустой экран с примерами, ответ со ссылками, окно источника с выделенным фрагментом,
@@ -202,6 +202,18 @@ def client(page) -> None:
 
     ask(page, SRAVN)
     shot(page, "20_sravnenie.png")
+
+    letter = ROOT / "data" / "show" / "Pismo_klienta.docx"      # письмо клиента — файлом в скрепке
+    if letter.exists():
+        new_dialog(page)
+        page.locator("[data-testid=stChatInput] input[type=file]").set_input_files(str(letter))
+        time.sleep(1)
+        box = page.get_by_placeholder("Спросите о")
+        box.fill("Подготовь ТКП")
+        box.press("Enter")
+        wait_answer(page)
+        to_question(page)
+        shot(page, "26_pismo_fajlom.png")
 
 
 def login(browser, who: str):

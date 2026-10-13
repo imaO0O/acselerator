@@ -116,6 +116,34 @@ def order_docx(path: Path, correct: bool) -> None:
     doc.save(path)
 
 
+LETTER = [
+    "ООО «Приборсервис» (ДЕМО)",
+    "Исх. № 112 от 12.10.2026",
+    "",
+    "Добрый день!",
+    "",
+    "Для оснащения сервисного участка просим направить технико-коммерческое предложение на поставку:",
+    "1) осциллограф цифровой с полосой пропускания не менее 150 МГц и 4 каналами — 2 шт.;",
+    "2) мультиметр для измерения постоянного тока до 15 А — 3 шт.;",
+    "3) паяльная станция для пайки при 450 °C — 1 шт.;",
+    "4) источник питания лабораторный 30 В, 5 А — 1 шт.",
+    "",
+    "Просим указать сроки поставки. Ответ ждём до 17.10.2026.",
+    "",
+    "С уважением,",
+    "инженер по оборудованию (ДЕМО)",
+]
+
+
+def letter_docx(path: Path) -> None:
+    """Письмо клиента для сцены «приложить письмо → черновик ТКП». Организация и подпись — демонстрационные."""
+    from docx import Document
+    doc = Document()
+    for line in LETTER:
+        doc.add_paragraph(line)
+    doc.save(path)
+
+
 def as_scan(src: Path, dst: Path, dpi: int = 150) -> None:
     """Страницы PDF — в серые картинки без текстового слоя, как после сканера."""
     doc, out = pymupdf.open(src), pymupdf.open()
@@ -140,3 +168,5 @@ if __name__ == "__main__":
     for name, correct in [("Prikaz_s_oshibkami.docx", False), ("Prikaz_ispravlennyy.docx", True)]:
         order_docx(SHOW / name, correct)
         print(SHOW / name)
+    letter_docx(SHOW / "Pismo_klienta.docx")
+    print(SHOW / "Pismo_klienta.docx")

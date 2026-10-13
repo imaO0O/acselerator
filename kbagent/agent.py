@@ -494,6 +494,32 @@ class Agent:
         return AgentResult(question, role, "documents", "answer", "\n".join(lines), sources=sources,
                            stats={"editions": [cmp.old_id, cmp.new_id]})
 
+    def attachment(self, filename: str, data: bytes, role: str = "Администратор", question: str = "",
+                   user: str | None = None) -> "AgentResult":
+        """Файл, приложенный к сообщению. Письмо клиента (Word, PDF, текст, .eml) с продукцией из справочника —
+        разбор и черновик ТКП; документ Word без запроса клиента или с просьбой проверить оформление —
+        нормоконтроль по ГОСТ Р 7.0.97."""
+        question = (question or "").strip()
+        is_docx = filename.lower().endswith(".docx")
+        if not (is_docx and tkp.NORMO_RE.search(question)):
+            try:
+                text = tkp.letter_text(filename, data)
+            except Exception:  # noqa: BLE001 — повреждённый файл: для Word — нормоконтроль скажет сам
+                text = ""
+            allowed = settings.roles.get(role, {"all"})
+            request = tkp.parse(text, allowed) if text.strip() else None
+            if request is not None and (tkp.is_request(text, request) or tkp.TKP_WORDS_RE.search(question)) \
+                    and tkp.has_offer(request):
+                result = self.ask(f"Подготовь ТКП по письму клиента:\n{text[:6000]}", role=role, user=user)
+                result.question = f"{question or 'Подготовь ТКП по письму клиента'} · {filename}"
+                return result
+        if is_docx:
+            return self.normocontrol(filename, data, role=role, question=question, user=user)
+        return AgentResult(f"{question} · {filename}", role, "help", "info",
+                           f"В файле «{filename}» не нашлось запроса клиента на продукцию из справочника параметров. "
+                           "Вставьте текст письма в поле ввода или приложите документ Word — проверю его оформление "
+                           "по ГОСТ Р 7.0.97.")
+
     def normocontrol(self, filename: str, data: bytes, role: str = "Администратор", question: str = "",
                      user: str | None = None) -> "AgentResult":
         """Проверка оформления приложенного DOCX по ГОСТ Р 7.0.97: замечания со ссылками на пункты стандарта."""
@@ -744,7 +770,8 @@ class Agent:
             if tkp.is_request(base, request):
                 step("Разбираю запрос клиента…")
                 tkp.notify_experts(request, base[:300], user, role)
-                result = AgentResult(question, role, "tkp", "answer", tkp.answer_text(request),
+                result = AgentResult(question, role, "tkp", "answer" if tkp.has_offer(request) else "no_data",
+                                     tkp.answer_text(request),
                                      sources=request.sources, columns=["n", "kind", "qty", "model", "param", "value",
                                                                        "verdict"],
                                      rows=tkp.rows(request), labels=tkp.ROW_LABELS,

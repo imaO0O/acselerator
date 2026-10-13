@@ -143,9 +143,18 @@ def main() -> int:
     for name in SHOW_DOCS:
         if not (settings.raw_dir.parent / "show" / f"{name}.pdf").exists():
             problems.append(f"нет data/show/{name}.pdf — запустите python scripts/make_show_docs.py")
+    letter = settings.raw_dir.parent / "show" / "Pismo_klienta.docx"
+    if letter.exists():                  # письмо клиента, приложенное файлом, → черновик ТКП
+        r = agent.attachment(letter.name, letter.read_bytes(), role=SALES, user="eval")
+        good = r.route == "tkp" and all(m in r.text for m in ("АКИП-4143/1", "DT9205A", "3 шт"))
+        print(f"   {'✓' if good else '✗'} письмо клиента файлом → ТКП: {r.text.splitlines()[0][:110]}")
+        if not good:
+            problems.append(f"письмо клиента файлом: {r.route} {r.text[:120]}")
+    else:
+        problems.append("нет data/show/Pismo_klienta.docx — запустите python scripts/make_show_docs.py")
     order = settings.raw_dir.parent / "show" / "Prikaz_s_oshibkami.docx"
     if order.exists():
-        r = agent.normocontrol(order.name, order.read_bytes(), user="eval")
+        r = agent.attachment(order.name, order.read_bytes(), question="Проверь оформление", user="eval")
         good = r.status == "answer" and "нарушений — 6" in r.text
         print(f"   {'✓' if good else '✗'} нормоконтроль приказа с ошибками: {r.text.splitlines()[0]}")
         if not good:

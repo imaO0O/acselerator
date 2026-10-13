@@ -136,3 +136,33 @@ def test_model_comparison_lists_differences():
     from kbagent import spravochnik as spr
     a = spr.answer(spr.understand("Чем отличаются АКИП-4122/1(V) и АКИП-4122/10(V)?"), {"all"}, "вопрос")
     assert "Различаются: частота дискретизации на канал" in a.text
+
+
+def test_letter_text_is_read_from_word_text_and_email():
+    import io
+
+    from docx import Document
+
+    from kbagent import tkp
+    doc = Document()
+    doc.add_paragraph("Просим КП: 2 осциллографа от 150 МГц на 4 канала")
+    buf = io.BytesIO()
+    doc.save(buf)
+    assert "2 осциллографа" in tkp.letter_text("Письмо.DOCX", buf.getvalue())
+    assert "мультиметр" in tkp.letter_text("p.txt", "Нужен мультиметр до 15 А".encode("cp1251"))
+    eml = ("Subject: =?utf-8?b?" + __import__("base64").b64encode("Запрос КП".encode()).decode() + "?=\n"
+           "Content-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\n"
+           "Нужна паяльная станция до 450 °C").encode("utf-8")
+    text = tkp.letter_text("m.eml", eml)
+    assert text.startswith("Запрос КП") and "паяльная станция" in text
+    t = tkp.parse(text, {"all"})
+    assert tkp.is_request(text, t) and t.positions[0].kind == "Паяльная станция"
+
+
+def test_letter_only_with_unknown_products_is_an_honest_refusal(tmp_path, monkeypatch):
+    from kbagent import experts, tkp
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    text = "Подготовьте ТКП на лабораторный источник питания 30 В 5 А и генератор сигналов"
+    t = tkp.parse(text, {"all"})
+    assert tkp.is_request(text, t) and not tkp.has_offer(t)
+    assert "нет в справочнике" in tkp.answer_text(t)

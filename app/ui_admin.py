@@ -425,6 +425,7 @@ def quality() -> None:
     main, jury, roles = (_report(results / f"{n}.md") for n in ("latest", "jury", "roles"))
     laptop, small = _report(results / "laptop.md"), _report(results / "smallgpu.md")
     notebook = _report(results / "laptop3050.md")        # настоящий ноутбук RTX 3050 4 ГБ (участник 2)
+    spr, offers = _report(results / "spravochnik.md"), _report(results / "tkp.md")
     if main is None:
         st.info("Результатов проверки качества пока нет: python eval/run_eval.py")
         return
@@ -443,8 +444,14 @@ def quality() -> None:
     c[2].metric("Ответ на видеокарте, медиана", seconds(main))
     c[3].metric("Ноутбук с видеокартой 4 ГБ, медиана", seconds(notebook) if notebook else seconds(small),
                 help="Ноутбук RTX 3050 4 ГБ (режим -SmallGpu). Без видеокарты NVIDIA ответ — около минуты")
+    c = st.columns(4)
+    c[0].metric("Справочник параметров", f"{spr['ok']} из {spr['total']}" if spr else "—",
+                help="Значение, проверка требования, подбор, сравнение, противоречие источников — eval/spravochnik.yaml")
+    c[1].metric("Письма клиентов → ТКП", f"{offers['ok']} из {offers['total']}" if offers else "—",
+                help="Позиции, количество, предложенная модель и источники в разборе письма — eval/tkp.yaml")
     for title, rep in [(f"Эталон — все {main['total']} вопросов", main), ("Вопросы «с ходу», как от жюри", jury),
-                       ("Разграничение доступа по ролям", roles),
+                       ("Разграничение доступа по ролям", roles), ("Справочник параметров", spr),
+                       ("Письма клиентов → ТКП", offers),
                        ("Эталон на ноутбуке RTX 3050 4 ГБ", notebook),
                        ("Эталон на ПК в режиме видеокарты 4 ГБ (-SmallGpu)", small),
                        ("Эталон на ПК, модель в оперативной памяти (-Cpu)", laptop)]:
