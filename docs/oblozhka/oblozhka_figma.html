@@ -7,12 +7,13 @@
   Фон — иллюстрация из Figma (fon.webp, 1920×1080): слева свободное фиолетовое поле, справа документы и электроника.
   Текст — на свободном поле, по левому краю, оптически чуть выше центра.
   Заголовок в два уровня, чтобы обложка читалась и в маленьком превью:
-    «AI-агент» — Unbounded (широкий геометрический, как заголовок в Figma),
-    продолжение фразы — Golos Text, лавандовый из палитры иллюстрации.
+    одна гарнитура Onest (гротеск, сделанный для кириллицы): «AI-агент» — SemiBold 124 px,
+    продолжение фразы — Regular 42 px, лавандовый из палитры иллюстрации.
+    Unbounded отклонён как слишком тяжёлый; сравнивались Onest, Manrope, Jost, Geologica.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500&family=Unbounded:wght@600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600&display=swap" rel="stylesheet">
 <style>
   :root { --white: #ffffff; --lavender: #ddd3f5; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,12 +21,10 @@
   .cover { position: relative; width: 1920px; height: 1080px; background: url("fon.webp") center / cover no-repeat; }
   h1 { position: absolute; left: 128px; top: 322px; width: 680px; font-weight: normal; }
   .title {
-    display: block; font-family: "Unbounded", sans-serif; font-weight: 600;
-    font-size: 112px; line-height: 1; letter-spacing: -.02em; color: var(--white);
+    display: block; font-family: "Onest", sans-serif; font-weight: 600; font-size: 124px; line-height: 1; letter-spacing: -.03em; color: var(--white);
   }
   .rest {
-    display: block; margin-top: 34px; font-family: "Golos Text", sans-serif; font-weight: 400;
-    font-size: 41px; line-height: 1.26; letter-spacing: -.005em; color: var(--lavender);
+    display: block; margin-top: 34px; font-family: "Onest", sans-serif; font-weight: 400; font-size: 42px; line-height: 1.26; letter-spacing: -.005em; color: var(--lavender);
   }
 </style>
 </head>
