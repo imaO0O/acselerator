@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Обложка проекта — по иллюстрации из Figma</title>
+<!--
+  Фон — иллюстрация из Figma (fon.webp, 1920×1080): слева свободное фиолетовое поле, справа документы и электроника.
+  Текст — на свободном поле, по левому краю, оптически чуть выше центра.
+  Заголовок в два уровня, чтобы обложка читалась и в маленьком превью:
+    «AI-агент» — Unbounded (широкий геометрический, как заголовок в Figma),
+    продолжение фразы — Golos Text, лавандовый из палитры иллюстрации.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500&family=Unbounded:wght@600&display=swap" rel="stylesheet">
+<style>
+  :root { --white: #ffffff; --lavender: #ddd3f5; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #4c3c6a; }
+  .cover { position: relative; width: 1920px; height: 1080px; background: url("fon.webp") center / cover no-repeat; }
+  h1 { position: absolute; left: 128px; top: 322px; width: 680px; font-weight: normal; }
+  .title {
+    display: block; font-family: "Unbounded", sans-serif; font-weight: 600;
+    font-size: 112px; line-height: 1; letter-spacing: -.02em; color: var(--white);
+  }
+  .rest {
+    display: block; margin-top: 34px; font-family: "Golos Text", sans-serif; font-weight: 400;
+    font-size: 41px; line-height: 1.26; letter-spacing: -.005em; color: var(--lavender);
+  }
+</style>
+</head>
+<body>
+<div class="cover">
+  <h1><span class="title">AI-агент</span><span class="rest">для поиска ответов по&nbsp;внутренней документации и&nbsp;базам данных предприятия</span></h1>
+</div>
+</body>
+</html>
