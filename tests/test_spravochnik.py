@@ -105,8 +105,9 @@ def test_tkp_word_document_has_positions_table(tmp_path, monkeypatch):
 
     from docx import Document
 
-    from kbagent import experts, tkp
+    from kbagent import experts, prais, tkp
     monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    monkeypatch.setattr(prais, "PATH", tmp_path / "net_praisa.csv")       # без прайса цены вписывает менеджер
     t = tkp.parse("ТКП: 2 осциллографа от 150 МГц на 4 канала, мультиметр на ток до 15 А", {"all"}).to_dict()
     text = tkp.draft_text(t, "Сотрудник")
     assert "АКИП-4143/1 — 2 шт." in text and "[заполняет менеджер]" in text
@@ -302,3 +303,64 @@ def test_letter_analog_and_subject_line(tmp_path, monkeypatch):
     assert t.positions[0].alternatives                       # названная подходит — она первая, аналоги — ниже
     answer = tkp.answer_text(t)
     assert "MAS830L не подходит: постоянный ток, верхний предел 10 А при требовании не менее 15 А" in answer
+
+
+def _price_list(tmp_path, monkeypatch, text, demo=True):
+    import json
+
+    from kbagent import prais
+    (tmp_path / "prais.csv").write_text(text, encoding="utf-8")
+    (tmp_path / "prais.json").write_text(json.dumps({"source": "p.csv", "date": "13.10.2026", "demo": demo}),
+                                         encoding="utf-8")
+    monkeypatch.setattr(prais, "DIR", tmp_path)
+    monkeypatch.setattr(prais, "PATH", tmp_path / "prais.csv")
+    monkeypatch.setattr(prais, "META", tmp_path / "prais.json")
+    prais._CACHE.clear()
+    return prais
+
+
+def test_price_list_is_checked_like_the_reference(tmp_path, monkeypatch):
+    prais = _price_list(tmp_path, monkeypatch, "Модель;Цена;Срок поставки\n"
+                                               "DT9205A;1 590 ₽;в наличии\n"
+                                               "MAS830L;0;в наличии\n"             # не положительная цена
+                                               "Мультиметр-X;990;\n"               # нет в справочнике
+                                               "DT9205A;1590;в наличии\n"          # повтор с той же ценой
+                                               "DT9205A;1690;2 недели\n"           # повтор с другой ценой
+                                               "DT9208A;;\n")                      # нет цены
+    prices, rep = prais.load()
+    assert set(prices) == {"DT9205A"} and prices["DT9205A"].price == 1590 and rep.duplicates == 1
+    assert [e["line"] for e in rep.errors] == [3, 4, 6, 7]
+    assert prais.label(rep) == "по прайсу от 13.10.2026 (ДЕМО — цены условные)"
+    assert prais.money(1590) == "1 590 ₽" and prais.money(1234.5) == "1 234,50 ₽"
+    # новый прайс от администратора: ошибки во всех строках — прежний остаётся; иначе дата загрузки и без «ДЕМО»
+    import pytest
+    with pytest.raises(ValueError, match="ни одна строка"):
+        prais.replace_file("p.csv", "Модель;Цена\nНет такой;100\n".encode("utf-8"))
+    assert set(prais.load()[0]) == {"DT9205A"}
+    rep = prais.replace_file("p.csv", "Модель;Цена;Срок поставки\nMAS830L;1290;в наличии\n".encode("utf-8"))
+    assert rep.prices == 1 and not rep.demo and "ДЕМО" not in prais.label(rep)
+
+
+def test_tkp_takes_prices_from_price_list(tmp_path, monkeypatch):
+    import io
+
+    from docx import Document
+
+    from kbagent import experts, tkp
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    _price_list(tmp_path, monkeypatch, "Модель;Цена;Срок поставки\nАКИП-4143/1;890000;6–8 недель\n"
+                                       "DT9205A;1590;в наличии\n")
+    t = tkp.parse("ТКП: 2 осциллографа от 150 МГц на 4 канала, мультиметр на ток до 15 А — 3 шт., паяльная станция "
+                  "до 450 °C", {"all"})
+    osc, mm, st = t.positions
+    assert (osc.price, osc.lead, mm.price, st.price) == (890000, "6–8 недель", 1590, None)
+    answer = tkp.answer_text(t)
+    assert "Цена по прайсу: 890 000 ₽ × 2 шт. = 1 780 000 ₽, срок поставки — 6–8 недель" in answer
+    assert "по прайсу от 13.10.2026 (ДЕМО" in answer and "без позиций без цены (1)" in answer
+    d = t.to_dict()
+    text = tkp.draft_text(d, "Сотрудник")
+    assert "Цена: 1 590 ₽ за шт., сумма 4 770 ₽, срок поставки — в наличии." in text
+    assert "Цена: [заполняет менеджер]" in text                       # паяльной станции в прайсе нет
+    table = Document(io.BytesIO(tkp.tkp_docx(text, d, "Сотрудник", "14.10.2026 12:00", "Агент"))).tables[0]
+    assert [c.text for c in table.rows[1].cells][4:] == ["890 000", "1 780 000"]
+    assert table.rows[-1].cells[0].text.startswith("Итого") and table.rows[-1].cells[5].text == "1 784 770"

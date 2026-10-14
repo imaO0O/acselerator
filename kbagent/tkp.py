@@ -8,7 +8,8 @@
   4) предлагает минимально достаточную модель — с наименьшим запасом по требованиям (окончательный выбор —
      за менеджером), показывает альтернативы;
   5) составляет вопросы клиенту по позициям без требований и передаёт эксперту противоречия источников.
-Цены и сроки агент не придумывает — их вписывает менеджер. Утверждает ТКП сотрудник, автоотправки нет.
+Цены и сроки агент не придумывает: берёт из прайса (kbagent/prais.py) с пометкой «по прайсу от …», чего нет
+в прайсе — вписывает менеджер. Утверждает ТКП сотрудник, автоотправки нет.
 """
 import io
 import math
@@ -71,6 +72,8 @@ class Position:
     note: str = ""
     ask_client: str = ""
     instead_of: str = ""     # «MAS830L или аналог», а MAS830L не подходит: «MAS830L — постоянный ток 10 А …»
+    price: float | None = None   # ₽ за штуку по прайсу (kbagent/prais.py); нет — цену вписывает менеджер
+    lead: str = ""               # срок поставки по прайсу
 
 
 @dataclass
@@ -79,6 +82,7 @@ class Tkp:
     sources: list
     expert_ids: list = field(default_factory=list)
     pending: list = field(default_factory=list)     # противоречия для эксперта — заводятся notify_experts
+    price_label: str = ""                           # «по прайсу от 13.10.2026 (ДЕМО …)», если цены подставлены
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -289,7 +293,20 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         missed = "; ".join(f"{c.param.lower()} {c.value} при требовании {c.need}" for c in pos.checks if c.ok is False)
         pos.note = f"ни одна модель в справочнике не подходит; ближайшая — {closest}: {missed}"
         pos.ask_client = f"{kind}: в нашем ассортименте нет модели под все требования ({missed}) — допустимо ли?"
-    return Tkp(_drop_mentions(positions), sources, [], pending)
+    positions = _drop_mentions(positions)
+    return Tkp(positions, sources, [], pending, price_label=_attach_prices(positions))
+
+
+def _attach_prices(positions: list) -> str:
+    """Цена и срок по прайсу — у предложенных и названных моделей; пометка «по прайсу от …», если что-то нашлось."""
+    from . import prais
+    prices, rep = prais.load()
+    found = False
+    for p in positions:
+        if p.status in ("offer", "named") and p.model in prices:
+            p.price, p.lead = prices[p.model].price, prices[p.model].lead
+            found = True
+    return prais.label(rep) if found else ""
 
 
 def _drop_mentions(positions: list) -> list:
@@ -407,6 +424,25 @@ def has_offer(t: Tkp) -> bool:
     return any(p.status != "not_in_catalog" for p in t.positions)
 
 
+def _price_text(price: float, qty: int, lead: str) -> str:
+    from .prais import money
+    return (f"Цена по прайсу: {money(price)} × {qty} шт. = {money(price * qty)}"
+            + (f", срок поставки — {lead}" if lead else ""))
+
+
+def _total(positions: list[dict], client: bool = False) -> str:
+    """Сумма по позициям с ценой; позиции без цены (нет в прайсе, нет подходящей модели) — менеджеру.
+    client — для письма клиенту: без внутренних пометок."""
+    from .prais import money
+    priced = [p for p in positions if p.get("price")]
+    if not priced:
+        return ""
+    rest = len(positions) - len(priced)
+    return (money(sum(p["price"] * p["qty"] for p in priced))
+            + ((" без учёта позиций, стоимость которых уточняется" if client
+                else f" — без позиций без цены ({rest}), их вписывает менеджер") if rest else ""))
+
+
 def answer_text(t: Tkp) -> str:
     if not has_offer(t):
         kinds = ", ".join(p.kind.lower() for p in t.positions)
@@ -416,11 +452,11 @@ def answer_text(t: Tkp) -> str:
     offers = sum(1 for p in t.positions if p.status in ("offer", "named"))
     reqs = sum(len(p.reqs) for p in t.positions)
     checked = sum(p.total for p in t.positions)
+    prices = (f"цены — {t.price_label}, подтверждает менеджер" if t.price_label else "цены и сроки — за менеджером")
     lines = [f"**Разбор запроса клиента:** позиций — {len(t.positions)}, требований — {reqs}, проверено моделей по "
              f"справочнику — {checked} → предложение готово по {offers} из {len(t.positions)}. "
              "Подбор и сравнение с требованиями — программой, без языковой модели. Предлагается минимально "
-             "достаточная модель — с наименьшим запасом по требованиям; окончательный выбор, цены и сроки — "
-             "за менеджером."]
+             f"достаточная модель — с наименьшим запасом по требованиям; окончательный выбор — за менеджером, {prices}."]
     for p in t.positions:
         lines.append("")
         head = f"**{p.n}. {_pos_title(p)}**"
@@ -441,6 +477,11 @@ def answer_text(t: Tkp) -> str:
                 lines.append(f"- {p.model}: " + "; ".join(_check_text(c) for c in p.checks) + ".")
         else:
             lines.append(f"- {p.note[:1].upper() + p.note[1:]}.")
+        if p.price:
+            lines.append(f"- {_price_text(p.price, p.qty, p.lead)}.")
+    total = _total([asdict(p) for p in t.positions])
+    if total:
+        lines += ["", f"**Итого по прайсу:** {total}."]
     asks = [p.ask_client for p in t.positions if p.ask_client]
     if asks:
         lines += ["", "**Уточнить у клиента:**"] + [f"- {a}" for a in asks]
@@ -469,10 +510,15 @@ ROW_LABELS = ["№", "Позиция", "Кол-во", "Модель", "Пара�
 
 def draft_text(t: dict, signer: str = "") -> str:
     """Сопроводительное письмо к ТКП. Позиции и характеристики — из справочника (в таблице Word их не правят),
-    цены и сроки — пропуски для менеджера."""
+    цены и сроки — по прайсу, если модель в нём есть, иначе пропуски для менеджера."""
+    from .prais import money
     lines = ["Добрый день!", "", "Благодарим за запрос. По вашим требованиям предлагаем:"]
     for p in t["positions"]:
-        if p["status"] in ("offer", "named"):
+        if p["status"] in ("offer", "named") and p.get("price"):
+            lines.append(f"{p['n']}. {p['kind']} {p['model']} — {p['qty']} шт. Цена: {money(p['price'])} за шт., "
+                         f"сумма {money(p['price'] * p['qty'])}" + (f", срок поставки — {p['lead']}" if p.get("lead")
+                                                                     else "") + ".")
+        elif p["status"] in ("offer", "named"):
             lines.append(f"{p['n']}. {p['kind']} {p['model']} — {p['qty']} шт. Цена: [заполняет менеджер].")
         elif p["status"] == "no_fit":
             lines.append(f"{p['n']}. {p['kind']} — подходящей модели под все требования нет, предлагаем обсудить "
@@ -485,18 +531,28 @@ def draft_text(t: dict, signer: str = "") -> str:
     if asks:
         lines += ["", "Просим уточнить:"] + [f"- {a}" for a in asks]
     lines += ["", "Соответствие характеристик вашим требованиям — в таблице ТКП; значения приведены по руководствам "
-              "по эксплуатации (источники — под таблицей).", "Срок поставки: [заполняет менеджер].", "",
-              "С уважением,", signer or "[ФИО, должность]"]
+              "по эксплуатации (источники — под таблицей)."]
+    offered = [p for p in t["positions"] if p["status"] in ("offer", "named")]
+    if t.get("price_label"):
+        lines.append(f"Цены — {t['price_label']}; итого {_total(t['positions'], client=True)}.")
+    if not offered or any(not p.get("lead") for p in offered):
+        lines.append("Срок поставки: [заполняет менеджер].")
+    lines += ["", "С уважением,", signer or "[ФИО, должность]"]
     return "\n".join(lines)
 
 
 def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: str) -> bytes:
-    """ТКП в Word: заголовок, письмо, таблица позиций (цена и сумма — для менеджера), источники, отметка."""
+    """ТКП в Word: заголовок, письмо, таблица позиций (цена и сумма — по прайсу или для менеджера), источники, отметка."""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm, Mm, Pt, RGBColor
 
     from .export import _runs
+    from .prais import money
+
+    def number(x: float) -> str:          # в колонках «Цена, ₽» и «Сумма, ₽» — без знака рубля
+        return money(x).replace(" ₽", "")
+
     doc = Document()
     for section in doc.sections:
         section.page_width, section.page_height = Mm(210), Mm(297)
@@ -540,7 +596,17 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
                   "no_reqs": "требования уточняются у клиента", "not_in_catalog": "уточняется возможность поставки"}
         cells[0].text, cells[1].text, cells[2].text = str(p["n"]), name, str(p["qty"])
         cells[3].text = checks or status.get(p["status"], "")
-        cells[4].text = cells[5].text = ""
+        price = p.get("price") if p["status"] in ("offer", "named") else None
+        cells[4].text = number(price) if price else ""
+        cells[5].text = number(price * p["qty"]) if price else ""
+    if t.get("price_label"):
+        cells = table.add_row().cells
+        merged = cells[0].merge(cells[4])
+        rest = sum(1 for p in t["positions"] if not p.get("price"))
+        merged.text = "Итого" + (f" (без позиций без цены: {rest})" if rest else "")
+        cells[5].text = number(sum(p["price"] * p["qty"] for p in t["positions"] if p.get("price")))
+        for c in (merged, cells[5]):
+            c.paragraphs[0].runs[0].bold = True
     for row in table.rows:
         for cell, width in zip(row.cells, (Cm(1), Cm(4.2), Cm(1.8), Cm(7), Cm(2.4), Cm(2.4))):
             cell.width = width
@@ -555,9 +621,10 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
     paragraphs(lines[cut:])
     doc.add_paragraph()
     note = doc.add_paragraph()
+    prices = (f"Цены — {t['price_label']}, окончательно подтверждает менеджер." if t.get("price_label")
+              else "Цены и сроки вписывает менеджер.")
     run = note.add_run(f"Черновик подготовлен: {app_name}, характеристики и соответствие требованиям — по справочнику "
-                       f"параметров со ссылками на руководства. Цены и сроки вписывает менеджер. "
-                       f"Утвердил: {approved_by}, {approved_at}.")
+                       f"параметров со ссылками на руководства. {prices} Утвердил: {approved_by}, {approved_at}.")
     run.italic, run.font.color.rgb, run.font.size = True, RGBColor(0x5C, 0x54, 0x70), Pt(10)
     buf = io.BytesIO()
     doc.save(buf)

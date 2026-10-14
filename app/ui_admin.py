@@ -17,7 +17,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import effect, experts, spravochnik
+from kbagent import effect, experts, prais, spravochnik
 from kbagent.actions import log_action
 from kbagent.text import md_plain
 
@@ -303,6 +303,48 @@ def reference() -> None:
         st.dataframe(df, hide_index=True, use_container_width=True, height=360)
         st.download_button("Скачать справочник (CSV)", spravochnik.PATH.read_bytes(), file_name="spravochnik.csv",
                            icon=":material/download:", key="spr-dl")
+    price_list()
+
+
+def price_list() -> None:
+    """Прайс для ТКП: цена и срок поставки моделей справочника; в ТКП — с пометкой «по прайсу от …»."""
+    prices, rep = prais.load()
+    st.subheader("Прайс для ТКП")
+    st.caption("Цена за штуку и срок поставки моделей из справочника параметров. В ТКП цена и сумма подставляются "
+               "с пометкой «по прайсу от …»; чего нет в прайсе — вписывает менеджер. Файл — CSV или XLSX с "
+               "колонками: " + ", ".join(prais.COLUMNS) + ".")
+    c = st.columns(3)
+    c[0].metric("Моделей с ценой", rep.prices)
+    c[1].metric("Строк с ошибками", len(rep.errors) if prices else 0)
+    c[2].metric("Дата прайса", rep.date or "—")
+    if rep.demo:
+        st.info("Сейчас загружен демонстрационный прайс: цены условные, в ТКП они помечены «ДЕМО». Загрузите прайс "
+                "предприятия — пометка исчезнет.")
+    if prices and rep.errors:
+        st.warning("Строки прайса, не прошедшие проверку, не загружены:")
+        st.dataframe(pd.DataFrame(rep.errors).rename(columns={"line": "Строка файла", "error": "Причина"}),
+                     hide_index=True, use_container_width=True)
+    with st.container(border=True):
+        st.markdown("**Загрузить новый прайс**")
+        st.caption("Проверяется до замены: цена — положительное число, модель есть в справочнике, повторы. Если ни "
+                   "одна строка не прошла проверку, действующий прайс остаётся. Дата прайса — день загрузки.")
+        st.session_state.setdefault("price_key", 0)
+        f = st.file_uploader("Прайс", type=["csv", "xlsx"], key=f"price-{st.session_state.price_key}",
+                             label_visibility="collapsed")
+        if f is not None:
+            try:
+                new = prais.replace_file(f.name, f.getvalue())
+                log_action("prais", ctx()["login"], f.name, f"цен: {new.prices}; ошибок: {len(new.errors)}")
+                st.session_state.price_note = ("success", f"Загружено цен: {new.prices}. Ошибок: {len(new.errors)}.")
+            except ValueError as e:
+                st.session_state.price_note = ("error", str(e))
+            st.session_state.price_key += 1
+            st.rerun()
+        if note := st.session_state.pop("price_note", None):
+            getattr(st, note[0])(note[1])
+    if prices:
+        st.dataframe(pd.DataFrame([{"Модель": p.model, "Цена, ₽": prais.money(p.price), "Срок поставки": p.lead or "—"}
+                                   for p in prices.values()]), hide_index=True, use_container_width=True, height=280)
 
 
 def expert_queue() -> None:
