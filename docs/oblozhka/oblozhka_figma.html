@@ -7,13 +7,13 @@
   Фон — иллюстрация из Figma (fon.webp, 1920×1080): слева свободное фиолетовое поле, справа документы и электроника.
   Текст — на свободном поле, по левому краю, оптически чуть выше центра.
   Заголовок в два уровня, чтобы обложка читалась и в маленьком превью:
-    одна гарнитура Onest (гротеск, сделанный для кириллицы): «AI-агент» — SemiBold 124 px,
-    продолжение фразы — Regular 42 px, лавандовый из палитры иллюстрации.
-    Unbounded отклонён как слишком тяжёлый; сравнивались Onest, Manrope, Jost, Geologica.
+    одна гарнитура Jost (геометрический, в духе Futura): «AI-агент» — Medium 132 px,
+    продолжение фразы — Light 44 px, лавандовый из палитры иллюстрации; переносы — по смыслу фразы.
+    Выбран из Onest, Manrope, Jost, Geologica (shrifty_sravnenie.png); мягкие варианты — shrifty_sravnenie_2.png.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;500&display=swap" rel="stylesheet">
 <style>
   :root { --white: #ffffff; --lavender: #ddd3f5; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -21,16 +21,16 @@
   .cover { position: relative; width: 1920px; height: 1080px; background: url("fon.webp") center / cover no-repeat; }
   h1 { position: absolute; left: 128px; top: 322px; width: 680px; font-weight: normal; }
   .title {
-    display: block; font-family: "Onest", sans-serif; font-weight: 600; font-size: 124px; line-height: 1; letter-spacing: -.03em; color: var(--white);
+    display: block; font-family: "Jost", sans-serif; font-weight: 500; font-size: 132px; line-height: 1; letter-spacing: -.01em; color: var(--white);
   }
   .rest {
-    display: block; margin-top: 34px; font-family: "Onest", sans-serif; font-weight: 400; font-size: 42px; line-height: 1.26; letter-spacing: -.005em; color: var(--lavender);
+    display: block; margin-top: 34px; font-family: "Jost", sans-serif; font-weight: 300; font-size: 44px; line-height: 1.26; letter-spacing: -.005em; color: var(--lavender);
   }
 </style>
 </head>
 <body>
 <div class="cover">
-  <h1><span class="title">AI-агент</span><span class="rest">для поиска ответов по&nbsp;внутренней документации и&nbsp;базам данных предприятия</span></h1>
+  <h1><span class="title">AI-агент</span><span class="rest">для поиска ответов<br>по внутренней документации<br>и базам данных предприятия</span></h1>
 </div>
 </body>
 </html>
