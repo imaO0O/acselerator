@@ -18,7 +18,8 @@
   :root { --white: #ffffff; --lavender: #ddd3f5; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { width: 1920px; height: 1080px; overflow: hidden; background: #4c3c6a; }
-  .cover { position: relative; width: 1920px; height: 1080px; background: url("fon.webp") center / cover no-repeat; }
+  .cover { position: relative; width: 1920px; height: 1080px; background: url("fon.webp") center / cover no-repeat;
+    background-image: image-set(url("fon.webp") 1x, url("fon_2x.png") 2x); }
   h1 { position: absolute; left: 128px; top: 322px; width: 680px; font-weight: normal; }
   .title {
     display: block; font-family: "Jost", sans-serif; font-weight: 500; font-size: 132px; line-height: 1; letter-spacing: -.01em; color: var(--white);
