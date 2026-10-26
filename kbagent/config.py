@@ -62,6 +62,10 @@ class Settings:
     # Сколько дней хранить журнал вопросов (0 — без ограничения); журнал действий не чистится
     log_retention_days: int = _env("KB_LOG_RETENTION_DAYS", 180)
     request_timeout: int = _env("KB_TIMEOUT", 300)
+    # НДС в итоге ТКП: ставка, % (0 — без НДС) и включён ли он в цены прайса. С 01.01.2026 общая ставка — 22 %;
+    # ставку и режим налогообложения продавца сверить с бухгалтерией
+    vat_rate: float = _env("KB_VAT_RATE", 22.0)
+    prices_include_vat: bool = _env("KB_PRICES_WITH_VAT", True)
 
     # Роли и доступные им группы документов (разграничение прав, демо)
     roles: dict = field(default_factory=lambda: {

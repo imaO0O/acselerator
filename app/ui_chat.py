@@ -7,7 +7,8 @@ import streamlit as st
 
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
-from kbagent import auth, effect, experts, tkp
+from kbagent import auth, effect, experts, prajs, tkp
+from kbagent.config import settings
 from kbagent.database import column_label, display
 from kbagent.actions import log_action
 from kbagent.export import answer_docx, draft_docx, draft_text
@@ -212,10 +213,44 @@ def tkp_dialog(i: int, uid: str) -> None:
     _draft_body(i, uid)
 
 
+def _tkp_choice(i: int, uid: str, data: dict) -> dict:
+    """Менеджер выбирает прибор по позиции из подходящих по требованиям (первым — минимально достаточный).
+    Разбор письма повторяется программой с этим выбором — характеристики, источники, цена и сумма пересчитываются."""
+    options = [p for p in data["positions"] if len(p.get("fit_models") or []) > 1]
+    if not options or not data.get("letter"):
+        return data                          # ТКП из старых диалогов — без выбора
+    prices, _ = prajs.load()
+    st.markdown("**Прибор по позициям** — из подходящих по всем требованиям; первым — минимально достаточный")
+    chosen = {}
+    for p in options:
+        models = p["fit_models"]
+
+        def label(m: str, first: str = models[0]) -> str:
+            return (m + (f" — {prajs.money(prices[m].price)}" if m in prices else " — цены нет в прайсе")
+                    + (" · минимально достаточный" if m == first else ""))
+        chosen[p["n"]] = st.selectbox(f"{p['n']}. {p['kind']} — {p['qty']} шт.", models, format_func=label,
+                                      index=models.index(p["model"]) if p["model"] in models else 0,
+                                      key=f"tkp-pick-{uid}-{p['n']}")
+    if all(chosen[p["n"]] == p["model"] for p in options):
+        return data
+    item = _conv()["items"][i]
+    fresh = tkp.parse(data["letter"], settings.roles.get(item["role"], {"all"}), chosen=chosen)
+    if fresh is None:
+        return data
+    new = fresh.to_dict()
+    new["expert_ids"] = data.get("expert_ids", [])
+    item["tkp"] = new
+    item.pop("draft", None)                  # письмо клиенту собирается заново под выбранные приборы
+    st.session_state.pop(f"draft-{uid}", None)
+    _save()
+    return new
+
+
 def _draft_body(i: int, uid: str) -> None:
     item = _conv()["items"][i]
     data = item.get("tkp")
     if data:
+        data = _tkp_choice(i, uid, data)
         st.caption("Сопроводительное письмо к ТКП. Позиции, характеристики и соответствие требованиям — в таблице "
                    "документа Word, они взяты из справочника параметров со ссылками на руководства; цены и сроки "
                    "впишите в Word. Ничего не отправляется автоматически.")

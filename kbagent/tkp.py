@@ -68,6 +68,10 @@ class Position:
     price_since: str = ""          # дата прайса, ГГГГ-ММ-ДД
     price_note: str = ""           # «ДЕМО», «прайс старше 90 дней — проверьте цену»
     alt_prices: dict = field(default_factory=dict)
+    fit_models: list = field(default_factory=list)   # все подходящие приборы: минимально достаточный — первым
+    minimal: str = ""              # минимально достаточный прибор (предлагается, пока менеджер не выбрал другой)
+    cheapest: str = ""             # дешевле всего из подходящих по прайсу — если это не предложенный прибор
+    cheapest_price: float | None = None
 
 
 @dataclass
@@ -77,6 +81,7 @@ class Tkp:
     expert_ids: list = field(default_factory=list)
     pending: list = field(default_factory=list)     # противоречия для эксперта — заводятся notify_experts
     price_list: bool = False                        # прайс загружен: «цены нет» — значит, нет в прайсе
+    letter: str = ""                                # текст письма — для повторного разбора с выбором менеджера
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -156,12 +161,15 @@ def _excess(v, r) -> float:
     return 0.0
 
 
-def parse(text: str, allowed: set[str]) -> Tkp | None:
+def parse(text: str, allowed: set[str], chosen: dict | None = None) -> Tkp | None:
     """Разбор письма клиента. None — в тексте нет продукции из справочника (это не запрос на подбор).
+    chosen — выбор менеджера {номер позиции: прибор}: прибор из подходящих вместо минимально достаточного.
     Ничего не записывает: противоречия для эксперта копятся в pending."""
+    letter = text
     from .experts import decisions
     from .ingest import access_of, load_catalog, registry_suffix
     values, rep = spr.load()
+    prices, _ = prajs.load()
     catalog = load_catalog(spr.settings.raw_dir)
     values = [v for v in values if access_of(catalog.get(v.doc, {})) in allowed]
     text = spr.normalize(text)                  # опечатки и единицы латиницей — к написанию справочника
@@ -222,14 +230,21 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         fit = [m for m in candidates if state[m] == "fit"]
         pos.fit_count = len(fit)
         if fit:
-            best = min(fit, key=lambda m: (sum(_excess(_first(by, m, r.param, contradicted, decided), r)
-                                               for r in reqs), m))
-            pos.model = best
-            pos.alternatives = [m for m in fit if m != best][:3]
+            minimal = min(fit, key=lambda m: (sum(_excess(_first(by, m, r.param, contradicted, decided), r)
+                                                  for r in reqs), m))
+            best = (chosen or {}).get(n) if (chosen or {}).get(n) in fit else minimal
+            by_price = [m for _, m in sorted((prices[m].price, m) for m in fit if m in prices)]
+            # для выбора: минимально достаточный, затем от дешёвых к дорогим, затем без цены
+            pos.fit_models = list(dict.fromkeys([minimal, *by_price, *fit]))
+            pos.minimal, pos.model = minimal, best
+            pos.alternatives = [m for m in pos.fit_models if m != best][:3]
+            if by_price and by_price[0] != best and (best not in prices or prices[by_price[0]].price < prices[best].price):
+                pos.cheapest, pos.cheapest_price = by_price[0], prices[by_price[0]].price
             pos.checks = [_check(best, r.param, r, by, contradicted, decided, ref) for r in reqs]
             pos.status = "offer"
             pos.note = ("предложена минимально достаточная модель — с наименьшим запасом по требованиям; "
-                        "окончательный выбор — за менеджером")
+                        "окончательный выбор — за менеджером") if best == minimal else (
+                        f"модель выбрана менеджером; минимально достаточная — {minimal}")
             continue
         unknown = [m for m in candidates if state[m] == "unknown"]
         if unknown:
@@ -260,7 +275,6 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         pos.ask_client = f"{kind}: в нашем ассортименте нет модели под все требования ({missed}) — допустимо ли?"
     for pos in positions:
         pos.checks = _merge_checks(pos.checks)
-    prices, _ = prajs.load()
     for pos in positions:
         if pos.status not in ("offer", "named"):
             continue
@@ -271,7 +285,7 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
             pos.price_note = "; ".join(x for x in ("ДЕМО" if pr.demo else "",
                                                    f"прайс старше {prajs.STALE_DAYS} дней — проверьте цену"
                                                    if pr.stale else "") if x)
-    return Tkp(positions, sources, [], pending, price_list=bool(prices))
+    return Tkp(positions, sources, [], pending, price_list=bool(prices), letter=letter)
 
 
 def _req_texts(reqs: list) -> list[str]:
@@ -418,6 +432,29 @@ def _price_line(p: dict, price_list: bool) -> str:
     return line + "."
 
 
+def _vat(total: float) -> tuple[float, float]:
+    """НДС и сумма с НДС для итога по прайсу — по настройкам KB_VAT_RATE и KB_PRICES_WITH_VAT."""
+    rate = spr.settings.vat_rate
+    if spr.settings.prices_include_vat:
+        return round(total * rate / (100 + rate), 2), total
+    vat = round(total * rate / 100, 2)
+    return vat, total + vat
+
+
+def _rate() -> str:
+    return f"{spr.settings.vat_rate:g}".replace(".", ",")
+
+
+def _vat_note(total: float) -> str:
+    """« (в т. ч. НДС 22 % — 70 409,84 ₽)», « + НДС 22 % … = …» или « (без НДС)»."""
+    if not spr.settings.vat_rate:
+        return " (без НДС)"
+    vat, gross = _vat(total)
+    if spr.settings.prices_include_vat:
+        return f" (в т. ч. НДС {_rate()} % — {prajs.money(vat)})"
+    return f" без НДС; НДС {_rate()} % — {prajs.money(vat)}, всего с НДС — {prajs.money(gross)}"
+
+
 def _priced(positions: list[dict]) -> list[dict]:
     return [p for p in positions if p["status"] in ("offer", "named") and p.get("price")]
 
@@ -448,26 +485,32 @@ def answer_text(t: Tkp) -> str:
             head += " Требования: " + "; ".join(p.reqs) + "."
         lines.append(head)
         if p.status == "offer":
-            lines.append(f"- Предлагаем **{p.model}**: " + "; ".join(_check_text(c) for c in p.checks) + ".")
+            head = (f"Предлагаем **{p.model}**" if p.model == p.minimal or not p.minimal else
+                    f"Выбрано менеджером: **{p.model}** (минимально достаточная — {p.minimal})")
+            lines.append(f"- {head}: " + "; ".join(_check_text(c) for c in p.checks) + ".")
             alts = [m + (f" — {prajs.money(p.alt_prices[m])}" if m in p.alt_prices else "") for m in p.alternatives]
             more = f"Также подходят: {', '.join(alts)}" if alts else "Других подходящих нет"
             lines.append(f"- {more} (всего {p.fit_count} из {p.total}).")
         elif p.status == "named":
             lines.append(f"- **{p.model}**: " + "; ".join(_check_text(c, mark=False) for c in p.checks) + ".")
-        if p.status in ("offer", "named") and (price := _price_line(asdict(p), t.price_list)):
-            lines.append(f"- {price}")
         elif p.status in ("no_fit", "expert"):
             lines.append(f"- {p.note[:1].upper() + p.note[1:]}.")
             if p.checks:
                 lines.append(f"- {p.model}: " + "; ".join(_check_text(c) for c in p.checks) + ".")
         else:
             lines.append(f"- {p.note[:1].upper() + p.note[1:]}.")
+        # цена и подсказка о более дешёвом — только у предложенного или названного прибора
+        if p.status in ("offer", "named") and (price := _price_line(asdict(p), t.price_list)):
+            lines.append(f"- {price}")
+        if p.cheapest:
+            lines.append(f"- Дешевле всего из подходящих: **{p.cheapest}** — {prajs.money(p.cheapest_price)} "
+                         "(прибор меняется в «Черновике ТКП»).")
     priced = _priced([asdict(p) for p in t.positions])
     if priced:
         offered = sum(1 for p in t.positions if p.status in ("offer", "named"))
         total = sum(p["price"] * p["qty"] for p in priced)
-        lines += ["", f"**Итого по прайсу:** {prajs.money(total)} — позиций с ценой {len(priced)} из {offered}; "
-                      "цены и сроки проверяет менеджер."]
+        lines += ["", f"**Итого по прайсу:** {prajs.money(total)}{_vat_note(total)} — позиций с ценой {len(priced)} "
+                      f"из {offered}; цены и сроки проверяет менеджер."]
     asks = [p.ask_client for p in t.positions if p.ask_client]
     if asks:
         lines += ["", "**Уточнить у клиента:**"] + [f"- {a}" for a in asks]
@@ -519,7 +562,8 @@ def draft_text(t: dict, signer: str = "") -> str:
               "по эксплуатации (источники — под таблицей)."]
     if priced:
         since = ", ".join(dict.fromkeys(prajs.shown_date(p["price_since"]) for p in priced))
-        lines.append(f"Цены указаны по прайс-листу от {since}.")
+        total = sum(p["price"] * p["qty"] for p in priced)
+        lines.append(f"Цены указаны по прайс-листу от {since}. Итого: {prajs.money(total)}{_vat_note(total)}.")
     leads = {p["n"]: p.get("lead") for p in offered}
     if offered and all(leads.values()) and len(set(leads.values())) == 1:
         lines.append(f"Срок поставки: {next(iter(leads.values()))}.")
@@ -588,9 +632,17 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
     priced = _priced(t["positions"])
     if priced:
         cells = table.add_row().cells
+        total = sum(p["price"] * p["qty"] for p in priced)
         cells[1].text = "Итого по прайсу"
-        cells[5].text = prajs.money(sum(p["price"] * p["qty"] for p in priced))
+        cells[5].text = prajs.money(total)
         cells[1].paragraphs[0].runs[0].bold = cells[5].paragraphs[0].runs[0].bold = True
+        vat, gross = _vat(total)
+        rows = ([] if not spr.settings.vat_rate else
+                [(f"в т. ч. НДС {_rate()} %", vat)] if spr.settings.prices_include_vat else
+                [(f"НДС {_rate()} %", vat), ("Всего с НДС", gross)])
+        for label, amount in rows or [("Без НДС", None)]:
+            cells = table.add_row().cells
+            cells[1].text, cells[5].text = label, prajs.money(amount) if amount is not None else ""
     for row in table.rows:
         for cell, width in zip(row.cells, (Cm(1), Cm(4.2), Cm(1.8), Cm(7), Cm(2.4), Cm(2.4))):
             cell.width = width

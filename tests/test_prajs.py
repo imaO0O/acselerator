@@ -60,7 +60,7 @@ def test_tkp_takes_price_and_sum_from_price_list(tmp_path, monkeypatch):
     text = tkp.answer_text(t)
     assert f"Цена по прайсу от {today} (ДЕМО): {prajs.money(189000)} × 2 шт. = {prajs.money(378000)}" in text
     assert "В прайсе цены нет — впишет менеджер" in text            # CXG DES H95
-    assert f"**Итого по прайсу:** {prajs.money(378000 + 4350)} — позиций с ценой 2 из 3" in text
+    assert f"**Итого по прайсу:** {prajs.money(382350)} (в т. ч. НДС 22 % — {prajs.money(round(382350 * 22 / 122, 2))}) — "            "позиций с ценой 2 из 3" in text
     d = t.to_dict()
     draft = tkp.draft_text(d, "Сотрудник")
     assert f"АКИП-4143/1 — 2 шт. Цена: {prajs.money(189000)} за шт., сумма {prajs.money(378000)}." in draft
@@ -69,7 +69,8 @@ def test_tkp_takes_price_and_sum_from_price_list(tmp_path, monkeypatch):
     doc = Document(io.BytesIO(tkp.tkp_docx(draft, d, "Сотрудник", f"{today} 12:00", "Агент")))
     rows = [[c.text for c in r.cells] for r in doc.tables[0].rows]
     assert rows[1][4:] == [prajs.money(189000), prajs.money(378000)] and rows[3][4:] == ["", ""]
-    assert rows[-1][1] == "Итого по прайсу" and rows[-1][5] == prajs.money(382350)
+    assert rows[-2][1] == "Итого по прайсу" and rows[-2][5] == prajs.money(382350)
+    assert rows[-1][1] == "в т. ч. НДС 22 %" and rows[-1][5] == prajs.money(round(382350 * 22 / 122, 2))
     note = doc.paragraphs[-1].text
     assert "по прайсу от" in note and "ДЕМО" in note and "чего нет в прайсе, вписывает менеджер" in note
 
@@ -86,3 +87,50 @@ def test_demo_price_list_loads_clean():
     prices, rep = prajs.load()
     assert len(prices) >= 20 and not rep.errors and not rep.conflicts and not rep.unknown
     assert all(p.demo for p in prices.values())
+
+
+def test_manager_picks_another_fitting_model_and_sees_the_cheapest(tmp_path, monkeypatch):
+    """Минимально достаточный прибор предлагается первым; менеджер выбирает другой из подходящих — характеристики,
+    цена и ТКП пересчитываются; самый дешёвый из подходящих подсказан отдельно."""
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    today = date.today().strftime("%d.%m.%Y")
+    monkeypatch.setattr(prajs, "PATH", write(tmp_path / "prajs.csv", [
+        f"DT9205A;1450;в наличии;{today};", f"DT9208A;990;в наличии;{today};"]))
+    letter = "ТКП: мультиметр на ток до 15 А — 3 шт."
+    t = tkp.parse(letter, {"all"})
+    pos = t.positions[0]
+    assert (pos.model, pos.minimal) == ("DT9205A", "DT9205A") and pos.fit_models == ["DT9205A", "DT9208A"]
+    assert (pos.cheapest, pos.cheapest_price) == ("DT9208A", 990)
+    text = tkp.answer_text(t)
+    assert "Предлагаем **DT9205A**" in text and f"Дешевле всего из подходящих: **DT9208A** — {prajs.money(990)}" in text
+    again = tkp.parse(t.letter, {"all"}, chosen={1: "DT9208A"})
+    pos = again.positions[0]
+    assert pos.model == "DT9208A" and pos.price == 990 and pos.alternatives == ["DT9205A"] and not pos.cheapest
+    assert all(c.ok for c in pos.checks)
+    assert "Выбрано менеджером: **DT9208A** (минимально достаточная — DT9205A)" in tkp.answer_text(again)
+    assert f"DT9208A — 3 шт. Цена: {prajs.money(990)} за шт., сумма {prajs.money(2970)}." in         tkp.draft_text(again.to_dict(), "Сотрудник")
+    # неподходящий прибор выбрать нельзя — остаётся минимально достаточный
+    assert tkp.parse(letter, {"all"}, chosen={1: "MAS830L"}).positions[0].model == "DT9205A"
+
+
+def test_vat_settings_in_total(tmp_path, monkeypatch):
+    from kbagent.config import settings
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    monkeypatch.setattr(prajs, "PATH", write(tmp_path / "prajs.csv", [f"DT9205A;1000;;{date.today():%d.%m.%Y};"]))
+    letter = "ТКП: мультиметр на ток до 15 А — 2 шт."
+    monkeypatch.setattr(settings, "prices_include_vat", False)
+    text = tkp.answer_text(tkp.parse(letter, {"all"}))
+    assert f"{prajs.money(2000)} без НДС; НДС 22 % — {prajs.money(440)}, всего с НДС — {prajs.money(2440)}" in text
+    monkeypatch.setattr(settings, "vat_rate", 0.0)
+    assert f"{prajs.money(2000)} (без НДС)" in tkp.answer_text(tkp.parse(letter, {"all"}))
+
+
+def test_offer_lines_do_not_repeat_the_service_note(tmp_path, monkeypatch):
+    """Строка цены не ломает порядок строк позиции: служебное примечание у предложенного прибора не печатается —
+    ни с прайсом, ни без него."""
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    for price_list in (write(tmp_path / "prajs.csv", [f"DT9205A;1450;;{date.today():%d.%m.%Y};"]),
+                       tmp_path / "net-prajsa.csv"):
+        monkeypatch.setattr(prajs, "PATH", price_list)
+        text = tkp.answer_text(tkp.parse(LETTER, {"all"}))
+        assert "Предложена минимально достаточная модель" not in text and "Предлагаем **DT9205A**" in text
