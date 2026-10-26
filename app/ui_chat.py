@@ -488,6 +488,25 @@ def _hero() -> None:
             st.rerun()
 
 
+def result_item(question: str, r, role: str) -> dict:
+    """Ответ агента — запись диалога (её показывает чат и сохраняет история)."""
+    return {"question": question, "asked": r.asked, "role": role, "route": r.route,
+            "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,
+            "labels": r.labels, "rows": r.rows, "seconds": r.seconds, "options": r.options,
+            "expert_ids": list(r.stats.get("expert_ids", [])), "tkp": r.stats.get("tkp"),
+            "baseline": (get_agent().search_baseline(r.asked or question, role)
+                         if r.status == "answer" and r.route not in ("help", "normo") else None),
+            "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
+
+
+def open_in_chat(question: str, r, role: str) -> None:
+    """Новый диалог с готовым ответом — например, разбор письма из почты; чат откроется на нём."""
+    conv = auth.new_conversation()
+    conv["items"].append(result_item(question, r, role))
+    auth.save_conversation(_key(), conv)
+    st.session_state.conv = conv
+
+
 def chat_page() -> None:
     inject_css(CHAT_CSS)
     if st.query_params.get("show") == "1":      # ссылка для записи экрана: сразу в режиме показа
@@ -535,13 +554,7 @@ def chat_page() -> None:
                 r = get_agent().ask(question, role=ctx()["role"], route=route, history=context or None,
                                     user=ctx()["login"], on_step=lambda msg: status.update(label=msg))
         holder.empty()                 # этапы нужны, пока идёт ответ; после — не загромождают диалог
-        item = {"question": question, "asked": r.asked, "role": ctx()["role"], "route": r.route,
-                "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,
-                "labels": r.labels, "rows": r.rows, "seconds": r.seconds, "options": r.options,
-                "expert_ids": list(r.stats.get("expert_ids", [])), "tkp": r.stats.get("tkp"),
-                "baseline": (get_agent().search_baseline(r.asked or question, ctx()["role"])
-                             if r.status == "answer" and r.route not in ("help", "normo") else None),
-                "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
+        item = result_item(question, r, ctx()["role"])
         items.append(item)
         _save()
         if len(items) == 1:

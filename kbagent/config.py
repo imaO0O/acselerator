@@ -70,6 +70,14 @@ class Settings:
     vat_rate: float = _env("KB_VAT_RATE", 22.0)
     prices_include_vat: bool = _env("KB_PRICES_WITH_VAT", True)
 
+    # почтовый ящик отдела → «Входящие запросы» (kbagent/mailbox.py); пароль — KB_MAIL_PASSWORD или data/mail_password.txt
+    mail_host: str = _env("KB_MAIL_HOST", "")
+    mail_port: int = _env("KB_MAIL_PORT", 993)
+    mail_user: str = _env("KB_MAIL_USER", "")
+    mail_folder: str = _env("KB_MAIL_FOLDER", "INBOX")
+    mail_ssl: bool = _env("KB_MAIL_SSL", True)
+    mail_role: str = _env("KB_MAIL_ROLE", "Техпродажи и сервис")   # права на документы при разборе писем
+
     # кто готовит ТКП и видит реестр ТКП
     tkp_roles: set = field(default_factory=lambda: {"Техпродажи и сервис", "Администратор"})
 

@@ -94,6 +94,7 @@ else:
 
 ctx = st.session_state.ctx
 pages = [st.Page(chat_page, title="Чат", icon=":material/forum:", default=True)]
+st.session_state.chat_page = pages[0]          # «Открыть в чате» из реестра ТКП переходит сюда
 if ctx["role"] in settings.tkp_roles:
     pages.append(st.Page(registry_page, title="Реестр ТКП", icon=":material/request_quote:", url_path="tkp"))
 if ctx["is_admin"]:

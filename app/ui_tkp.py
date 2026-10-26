@@ -2,9 +2,10 @@
 import pandas as pd
 import streamlit as st
 
-from app.ui_common import ctx, inject_css
-from kbagent import prajs, tkp_registry
+from app.ui_common import ctx, get_agent, inject_css
+from kbagent import mailbox, prajs, tkp_registry
 from kbagent.actions import log_action
+from kbagent.config import settings
 
 STATUS_ICONS = {"утверждён": "🟣", "отправлен клиенту": "🔵", "выигран": "🟢", "проигран": "⚪", "отменён": "⚫"}
 
@@ -19,9 +20,56 @@ def _date(value: str) -> str:
     return f"{d}.{m}.{y}"
 
 
+def _incoming() -> None:
+    """Входящие запросы из почтового ящика отдела: разбор готов, менеджер открывает его в чате."""
+    with st.container(border=True):
+        st.markdown("**Входящие запросы из почты**")
+        if not mailbox.configured():
+            st.caption("Почтовый ящик отдела не подключён. Укажите KB_MAIL_HOST, KB_MAIL_USER и пароль "
+                       "(KB_MAIL_PASSWORD или data/mail_password.txt): письма с запросами на продукцию будут "
+                       "появляться здесь с готовым разбором. Ящик читается только на чтение — письма не помечаются "
+                       "прочитанными, ничего не отправляется.")
+            return
+        st.caption(f"Ящик {settings.mail_user}, папка {settings.mail_folder} — только чтение. Автоматически — "
+                   "scripts/check_mail.py --watch 300.")
+        if st.button("Проверить почту", icon=":material/mail:", key="mail-check"):
+            with st.spinner("Читаю новые письма…"):
+                rep = mailbox.check()
+            st.session_state.mail_note = ("error", rep["error"]) if rep["error"] else (
+                "success", f"Новых писем: {rep['checked']}, из них запросов клиента: {rep['requests']}.")
+            st.rerun()
+        if note := st.session_state.pop("mail_note", None):
+            getattr(st, note[0])(note[1])
+        new = [m for m in reversed(mailbox.load()) if m["status"] == "новый"]
+        if not new:
+            st.caption("Новых запросов нет.")
+        for m in new[:20]:
+            c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
+            c1.markdown(f"**{m['subject'] or 'без темы'}** · {m['sender_name'] or m['sender']}  \n"
+                        f":gray[{m['received'] or m['created']} · {'; '.join(m['positions'])}"
+                        + (f" · вложения: {', '.join(m['attachments'])}" if m["attachments"] else "") + "]")
+            if c2.button("Открыть в чате", key=f"mail-open-{m['id']}", type="primary", width="stretch"):
+                _open(m)
+            if c3.button("Не запрос", key=f"mail-skip-{m['id']}", type="tertiary", width="stretch"):
+                mailbox.set_status(m["id"], "не запрос", ctx()["login"], ctx()["name"])
+                st.rerun()
+
+
+def _open(m: dict) -> None:
+    from app.ui_chat import open_in_chat
+    role = ctx()["role"]
+    r = get_agent().ask(f"Подготовь ТКП по письму клиента:\n{m['letter']}", role=role, user=ctx()["login"])
+    open_in_chat(f"Письмо клиента: {m['subject'] or 'без темы'} · {m['sender']}", r, role)
+    mailbox.set_status(m["id"], "открыт", ctx()["login"], ctx()["name"])
+    if page := st.session_state.get("chat_page"):
+        st.switch_page(page)
+    st.rerun()
+
+
 def registry_page() -> None:
     inject_css()
     st.markdown("### Реестр ТКП")
+    _incoming()
     records = tkp_registry.load()
     s = tkp_registry.summary(records)
     c = st.columns(5)
