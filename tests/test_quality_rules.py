@@ -64,3 +64,16 @@ def test_letters_pair_and_past_purchases():
     assert [(p.kind, p.qty) for p in t.positions] == [("Осциллограф", 1)]
     t = tkp.parse("Нужны такие же паяльные станции, как брали в прошлый раз, 3 шт.", {"all"})
     assert [(p.kind, p.qty) for p in t.positions] == [("Паяльная станция", 3)]     # просьба — позиция остаётся
+
+
+def test_budget_is_read_with_money_unit_only():
+    from kbagent import spravochnik as S
+    assert S.budget("бюджет до 50 000 рублей") == 50000 and S.budget("не дороже 2 тыс. руб.") == 2000
+    assert S.budget("до 50 000 руб") == 50000
+    assert S.budget("полоса до 50 МГц, 2 шт.") is None and S.budget("ток до 10 А") is None
+    values, _ = S.load()
+    q = "Осциллограф на 2 канала с полосой не менее 70 МГц, бюджет до 50 000 рублей"
+    text = S.answer(S.understand(q, values), {"all"}, q).text
+    assert "В бюджет до 50\xa0000\xa0₽" in text and "АКИП-4115/1В** — 38\xa0900\xa0₽" in text and "Дороже бюджета" in text
+    t = tkp.parse("Просим КП: 2 осциллографа с полосой не менее 150 МГц и 4 каналами. Бюджет до 300 000 рублей.", {"all"})
+    assert t.budget == 300000 and "Бюджет клиента — до 300\xa0000\xa0₽: итог" in tkp.answer_text(t)

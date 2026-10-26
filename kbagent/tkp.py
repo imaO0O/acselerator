@@ -86,6 +86,7 @@ class Tkp:
     pending: list = field(default_factory=list)     # противоречия для эксперта — заводятся notify_experts
     price_list: bool = False                        # прайс загружен: «цены нет» — значит, нет в прайсе
     letter: str = ""                                # текст письма — для повторного разбора с выбором менеджера
+    budget: float | None = None                     # бюджет клиента из письма, ₽ («бюджет до 400 000 рублей»)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -290,7 +291,7 @@ def parse(text: str, allowed: set[str], chosen: dict | None = None) -> Tkp | Non
             pos.price_note = "; ".join(x for x in ("ДЕМО" if pr.demo else "",
                                                    f"прайс старше {prajs.STALE_DAYS} дней — проверьте цену"
                                                    if pr.stale else "") if x)
-    return Tkp(positions, sources, [], pending, price_list=bool(prices), letter=letter)
+    return Tkp(positions, sources, [], pending, price_list=bool(prices), letter=letter, budget=spr.budget(letter))
 
 
 def _req_texts(reqs: list) -> list[str]:
@@ -516,6 +517,11 @@ def answer_text(t: Tkp) -> str:
         total = sum(p["price"] * p["qty"] for p in priced)
         lines += ["", f"**Итого по прайсу:** {prajs.money(total)}{_vat_note(total)} — позиций с ценой {len(priced)} "
                       f"из {offered}; цены и сроки проверяет менеджер."]
+        if t.budget:
+            over = total - t.budget
+            lines.append(f"Бюджет клиента — до {prajs.money(t.budget)}: " + (
+                f"итог укладывается (запас {prajs.money(-over)})." if over <= 0 else
+                f"итог превышает бюджет на {prajs.money(over)} — посмотрите приборы дешевле в «Черновике ТКП»."))
     asks = [p.ask_client for p in t.positions if p.ask_client]
     if asks:
         lines += ["", "**Уточнить у клиента:**"] + [f"- {a}" for a in asks]

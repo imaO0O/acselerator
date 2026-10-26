@@ -292,6 +292,44 @@ class Query:
     all_params: bool = False
 
 
+# бюджет клиента: «бюджет до 50 000 рублей», «не дороже 1000 руб.», «в пределах 60 тыс. ₽» — только с денежной
+# единицей, чтобы «до 50 МГц» не стало бюджетом
+BUDGET_RE = re.compile(r"(?:бюджет\w*|не дороже|дешевле|стоимост\w*\s+(?:не более|до)|цен\w*\s+(?:не более|до)|"
+                       r"в пределах|(?<![\w-])до)\D{0,12}?(\d{1,3}(?:[\s\xa0]?\d{3})*(?:[.,]\d+)?)\s*(тыс\.?|тысяч\w*|млн\.?)?\s*"
+                       r"(?:₽|руб\w*|р\.)", re.I)
+
+
+def budget(text: str) -> float | None:
+    """Бюджет клиента в рублях или None."""
+    m = BUDGET_RE.search(text or "")
+    if not m:
+        return None
+    value = float(re.sub(r"[\s\xa0]", "", m.group(1)).replace(",", "."))
+    unit = (m.group(2) or "").lower()
+    return value * (1_000_000 if unit.startswith("млн") else 1000 if unit.startswith("тыс") else 1)
+
+
+def budget_lines(models: list[str], limit: float) -> list[str]:
+    """Какие модели укладываются в бюджет по прайсу (от дешёвых), какие дороже, у каких нет цены."""
+    from . import prajs                                     # прайс опирается на справочник — импорт здесь
+    prices, _ = prajs.load()
+    priced = sorted((prices[m].price, m) for m in models if m in prices)
+    within = [(p, m) for p, m in priced if p <= limit]
+    over = [m for p, m in priced if p > limit]
+    noprice = [m for m in models if m not in prices]
+    if not prices:
+        return [f"Бюджет клиента — до {prajs.money(limit)}: прайс не загружен, сравнить цены не с чем."]
+    since = prajs.shown_date(next(iter(prices.values())).since)
+    out = [f"В бюджет до {prajs.money(limit)} (по прайсу от {since}) укладываются: "
+           + (", ".join(f"**{m}** — {prajs.money(p)}" for p, m in within[:8]) if within else "ни одна подходящая модель")
+           + "."]
+    if over:
+        out.append("Дороже бюджета: " + ", ".join(over[:10]) + (f" и ещё {len(over) - 10}" if len(over) > 10 else "") + ".")
+    if noprice:
+        out.append("Нет цены в прайсе: " + ", ".join(noprice[:10]) + ".")
+    return out
+
+
 def _norm(s: str) -> str:
     """Для сравнения обозначений: латиница вместо похожих русских букв, без дефисов, скобок и кавычек;
     пробелы между словами сохраняются — по ним видны границы обозначения в вопросе."""
@@ -632,6 +670,9 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
                              + (f" и ещё {len(unfit) - 20}" if len(unfit) > 20 else "") + ".")
             if unknown:
                 lines.append("Нет данных или источники расходятся: " + ", ".join(m for m, _ in unknown) + ".")
+        if (limit := budget(question)) is not None:
+            lines += [""] + budget_lines([m for m, _ in fit] if not q.models else list(q.models), limit)
+            demand["budget"] = limit
         status = "answer"
     else:
         head = "По справочнику параметров:"
