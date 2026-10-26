@@ -72,3 +72,58 @@ def tokenize(text: str) -> list[str]:
         elif len(raw) > 1:
             tokens.append(_stem(raw))
     return tokens
+
+
+# ---------- обозначения: модели, артикулы, децимальные номера, ТУ ----------
+# Обычный разбор режет «АКИП-4122/10» на «акип», «4122», «10», а «АБВГ.468157.001-01» — на «абвг», «468157.001»,
+# «01»: модели одной серии почти не различаются. Поэтому обозначение добавляется к словам поиска ещё и целиком,
+# одним редким «словом» — при совпадении оно сильно поднимает нужный фрагмент. Похожие русские и латинские буквы
+# (А/A, В/B, С/C…) уравниваются, разделители (пробел, точка, дефис, косая черта) не важны.
+LOOKALIKE = str.maketrans("авекмнорстху", "abekmhopctxy")
+DECIMAL_RE = re.compile(r"(?<![\w.])([a-zа-яё]{4})\s?[.\s]\s?(\d{6})\s?[.\s]\s?(\d{3})(?:\s?-\s?(\d{2,3}))?(?!\w)", re.I)
+DECIMAL_DIGITS_RE = re.compile(r"(?<![\w.])(\d{6})\.(\d{3})(?:-(\d{2,3}))?(?![\w.]*\w)")
+TU_RE = re.compile(r"(?<!\w)ту\s*((?:\d{2}\.\d{2}\.\d{2}|\d{4})\s*-\s*\d{3}\s*-\s*\d{8}\s*-\s*\d{2,4})", re.I)
+CODE_RE = re.compile(r"(?<![\w./-])[a-zа-яё0-9]+(?:[./+-][a-zа-яё0-9]+)*\+?(?![\w./-]*\w)", re.I)
+PREFIX_RE = re.compile(r"([a-zа-яё]+)-?(\d.*)", re.I)                 # «АКИП-4115/2В» → «4115/2В»
+SERIES_RE = re.compile(r"(?<![\w-])([A-ZА-ЯЁ]{2,6})\s+(\d[\w./+-]*)")  # «АКИП 4115/2В» — как «АКИП-4115/2В»
+QUANTITY_RE = re.compile(r"\d+(?:[.,]\d+)?[a-zа-яё°]{1,4}", re.I)     # «150МГц», «15А» — величины, не обозначения
+
+
+def _compact(s: str) -> str:
+    return re.sub(r"[^0-9a-zа-я+]", "", s.lower().replace("ё", "е")).translate(LOOKALIKE)
+
+
+def _is_code(c: str, raw: str = "") -> bool:
+    """Буквы и цифры («MAS830L») или цифры через косую черту — исполнение модели («4122/10» из «АКИП-4122/10»)."""
+    return len(c) >= 4 and bool(re.search(r"\d", c)) and (bool(re.search(r"[a-zа-я]", c)) or "/" in raw)
+
+
+def designation_tokens(text: str) -> list[str]:
+    """Обозначения из текста целиком: «code:akип41152b» и «code:41152b» («АКИП-4115/2В», «акип 4115/2в»,
+    «4115/2В» совпадают), «dn:абвг468157001» и «dn:468157001» (децимальный номер, в том числе без букв),
+    «tu:4221001123456782015» (ТУ)."""
+    out = []
+    for m in DECIMAL_RE.finditer(text):
+        letters, a, b, ex = m.group(1).lower().replace("ё", "е").translate(LOOKALIKE), m.group(2), m.group(3), m.group(4)
+        out += [f"dn:{letters}{a}{b}", f"dn:{a}{b}"] + ([f"dn:{letters}{a}{b}{ex}", f"dn:{a}{b}{ex}"] if ex else [])
+    for m in DECIMAL_DIGITS_RE.finditer(text):
+        out += [f"dn:{m.group(1)}{m.group(2)}"] + ([f"dn:{m.group(1)}{m.group(2)}{m.group(3)}"] if m.group(3) else [])
+    for m in TU_RE.finditer(text):
+        out.append("tu:" + re.sub(r"\D", "", m.group(1)))
+    for m in CODE_RE.finditer(text):
+        raw = m.group(0)
+        if QUANTITY_RE.fullmatch(raw):
+            continue
+        if _is_code(c := _compact(raw), raw):
+            out.append(f"code:{c}")
+        if (p := PREFIX_RE.fullmatch(raw)) and _is_code(c := _compact(p.group(2)), p.group(2)):
+            out.append(f"code:{c}")
+    for m in SERIES_RE.finditer(text):
+        if m.group(1).lower() not in STOPWORDS and _is_code(c := _compact(m.group(1) + m.group(2))):
+            out.append(f"code:{c}")
+    return list(dict.fromkeys(out))
+
+
+def word_tokens(text: str) -> list[str]:
+    """Слова для поиска по словам (BM25): основы слов и числа + обозначения целиком."""
+    return tokenize(text) + designation_tokens(text)

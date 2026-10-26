@@ -23,7 +23,7 @@ import numpy as np
 
 from . import llm
 from .ingest import Chunk, parse_corpus, parse_document
-from .text import tokenize
+from .text import word_tokens
 
 
 class BM25:
@@ -95,7 +95,7 @@ class Index:
     def __init__(self, chunks: list[Chunk], vectors: np.ndarray):
         self.chunks = chunks
         self.vectors = vectors
-        self.bm25 = BM25([tokenize(c.search_text) for c in chunks])
+        self.bm25 = BM25([word_tokens(c.search_text) for c in chunks])
         self.access = np.array([c.access for c in chunks])
         self.stamp: int | None = None          # версия индекса на диске, с которой совпадает эта копия
 
@@ -132,7 +132,7 @@ class Index:
 
     def _rebuild_word_index(self) -> None:
         # новые структуры строятся целиком и подставляются вместе — поиск в соседнем потоке не увидит смеси
-        self.bm25, self.access = BM25([tokenize(c.search_text) for c in self.chunks]), np.array(
+        self.bm25, self.access = BM25([word_tokens(c.search_text) for c in self.chunks]), np.array(
             [c.access for c in self.chunks])
 
     def reload_if_changed(self, index_dir: Path) -> bool:
@@ -229,7 +229,7 @@ class Index:
         return mask
 
     def search_words(self, query: str, allowed: set[str], k: int, docs: set[str] | None = None) -> list[tuple[int, float]]:
-        s = self.bm25.scores(tokenize(query))
+        s = self.bm25.scores(word_tokens(query))
         s[~self._mask(allowed, docs)] = 0
         top = np.argsort(-s)[:k]
         return [(int(i), float(s[i])) for i in top if s[i] > 0]
