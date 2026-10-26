@@ -6,9 +6,12 @@
 у каждого ключа своя роль, поэтому права на документы соблюдаются так же, как в чате.
 В data/api_keys.yaml хранятся только хэши ключей. Каждый запрос пишется в общий журнал.
 """
+import base64
+import binascii
 import hashlib
 import hmac
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -18,7 +21,7 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from kbagent import llm  # noqa: E402
+from kbagent import llm, tkp  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
@@ -86,6 +89,60 @@ class AskResponse(BaseModel):
     seconds: float
 
 
+class LetterFile(BaseModel):
+    name: str = Field(..., max_length=200, examples=["Запрос_клиента.docx"], description="имя файла: .docx, .pdf, .txt, .eml")
+    content_base64: str = Field(..., max_length=14_000_000, description="содержимое файла в base64 (до 10 МБ)")
+
+
+class TkpRequest(BaseModel):
+    letter: str = Field("", max_length=20_000, description="текст письма клиента — или file",
+                        examples=["Просим КП: 2 осциллографа от 150 МГц на 4 канала, мультиметр на ток до 15 А — 3 шт."])
+    file: LetterFile | None = None
+    choices: dict[int, str] = Field(default_factory=dict,
+                                    description="выбор менеджера: {номер позиции: прибор из fit_models}")
+    signer: str = Field("", max_length=200, description="подпись в письме клиенту")
+    include_docx: bool = Field(True, description="вернуть ТКП в Word (base64)")
+
+
+class Check(BaseModel):
+    param: str
+    need: str
+    value: str
+    ok: bool | None = Field(description="true — соответствует, false — нет, null — не проверить")
+    source: int | None = Field(None, description="номер источника из sources")
+
+
+class Position(BaseModel):
+    n: int
+    kind: str
+    qty: int
+    requirements: list[str]
+    status: str = Field(description="offer | named | no_fit | expert | no_reqs | not_in_catalog")
+    model: str | None = None
+    minimal: str = Field("", description="минимально достаточный прибор")
+    fit_models: list[str] = Field(default_factory=list, description="все подходящие — для выбора менеджером")
+    cheapest: str = ""
+    checks: list[Check] = []
+    price: float | None = None
+    sum: float | None = None
+    lead: str = ""
+    note: str = ""
+    ask_client: str = ""
+
+
+class TkpResponse(BaseModel):
+    status: str = Field(description="answer — есть предложение | no_offer — продукции нет в справочнике | "
+                                    "not_request — в письме нет продукции из справочника")
+    positions: list[Position] = []
+    total: float | None = Field(None, description="итог по прайсу")
+    vat: float | None = Field(None, description="НДС по ставке KB_VAT_RATE")
+    sources: list[Source] = []
+    text: str = Field("", description="разбор, как в чате")
+    letter_draft: str = Field("", description="черновик письма клиенту")
+    docx_base64: str | None = None
+    seconds: float
+
+
 @app.get("/health")
 def health() -> dict:
     state = llm.health()
@@ -107,3 +164,52 @@ def ask(req: AskRequest, who: dict = Depends(client)) -> AskResponse:
     table = {"columns": r.labels or r.columns, "rows": r.rows} if r.rows else None
     return AskResponse(status=r.status, route=r.route, text=r.text, understood_as=r.asked, sources=sources,
                        table=table, options=r.options, seconds=r.seconds)
+
+
+@app.post("/tkp", response_model=TkpResponse)
+def make_tkp(req: TkpRequest, who: dict = Depends(client)) -> TkpResponse:
+    """Письмо клиента → позиции, подбор по справочнику, цены из прайса, черновик письма и ТКП в Word.
+    Программой, без языковой модели: работает и когда серверы моделей не запущены. Автоотправки нет —
+    ТКП утверждает сотрудник; противоречия источников уходят в очередь эксперта, как из чата."""
+    t0 = time.time()
+    user = f"api:{who['name']}"
+    letter = req.letter.strip()
+    if req.file is not None:
+        try:
+            data = base64.b64decode(req.file.content_base64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise HTTPException(422, "content_base64 — не base64") from e
+        if not req.file.name.lower().endswith(tuple(f".{x}" for x in tkp.LETTER_TYPES)):
+            raise HTTPException(422, "Поддерживаются письма .docx, .pdf, .txt, .eml")
+        try:
+            letter = tkp.letter_text(req.file.name, data).strip()
+        except Exception as e:  # noqa: BLE001 — повреждённый файл
+            raise HTTPException(422, "Не удалось прочитать файл письма") from e
+    if len(letter) < 5:
+        raise HTTPException(422, "Нужен текст письма (letter) или файл (file)")
+    t = tkp.parse(letter, settings.roles[who["role"]], chosen=req.choices or None)
+    if t is None:
+        log_action("api_tkp", user, letter[:120], "нет продукции из справочника")
+        return TkpResponse(status="not_request", seconds=round(time.time() - t0, 2))
+    tkp.notify_experts(t, letter[:300], user, who["role"])
+    d = t.to_dict()
+    priced = [p for p in d["positions"] if p["status"] in ("offer", "named") and p.get("price")]
+    total = sum(p["price"] * p["qty"] for p in priced) if priced else None
+    positions = [Position(
+        n=p["n"], kind=p["kind"], qty=p["qty"], requirements=p["reqs"], status=p["status"], model=p["model"],
+        minimal=p.get("minimal", ""), fit_models=p.get("fit_models", []), cheapest=p.get("cheapest", ""),
+        checks=[Check(param=c["param"], need=c["need"], value=c["value"], ok=c["ok"], source=c["ref"])
+                for c in p["checks"]],
+        price=p.get("price"), sum=p["price"] * p["qty"] if p.get("price") else None, lead=p.get("lead", ""),
+        note=p["note"], ask_client=p["ask_client"]) for p in d["positions"]]
+    draft = tkp.draft_text(d, req.signer) if tkp.has_offer(t) else ""
+    docx = None
+    if draft and req.include_docx:
+        docx = base64.b64encode(tkp.tkp_docx(draft, d, "не утверждён — черновик через API",
+                                             time.strftime("%d.%m.%Y %H:%M"), "AI-агент")).decode()
+    log_action("api_tkp", user, letter[:120], f"позиций: {len(positions)}; с ценой: {len(priced)}")
+    return TkpResponse(
+        status="answer" if tkp.has_offer(t) else "no_offer", positions=positions, total=total,
+        vat=tkp._vat(total)[0] if total and settings.vat_rate else None,
+        sources=[Source(n=s["n"], label=s["label"], doc_id=s["doc_id"], page=s.get("page")) for s in d["sources"]],
+        text=tkp.answer_text(t), letter_draft=draft, docx_base64=docx, seconds=round(time.time() - t0, 2))

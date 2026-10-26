@@ -427,3 +427,35 @@ def test_rejected_model_key_is_explained(monkeypatch):
     monkeypatch.setattr(llm.requests, "post", lambda *a, **k: Reply())
     with pytest.raises(llm.ModelError, match="ключ доступа"):
         llm._post("http://127.0.0.1:8080/v1/x", {})
+
+
+def test_api_builds_tkp_from_letter_without_models(tmp_path, monkeypatch, tmp_settings):
+    import base64
+    import io
+
+    from docx import Document
+    from fastapi.testclient import TestClient
+
+    from api import server
+    from kbagent import experts, llm
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    monkeypatch.setattr(server, "KEYS_PATH", tmp_path / "keys.yaml")
+    monkeypatch.setattr(llm, "_post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("модель не нужна")))
+    (tmp_path / "keys.yaml").write_text(
+        f"keys:\n- name: crm\n  role: Техпродажи и сервис\n  hash: {server.key_hash('kb_crm')}\n", encoding="utf-8")
+    api, key = TestClient(server.app), {"X-API-Key": "kb_crm"}
+    letter = "Просим КП: 2 осциллографа от 150 МГц на 4 канала, мультиметр на ток до 15 А — 3 шт."
+    assert api.post("/tkp", json={"letter": letter}).status_code == 401
+    r = api.post("/tkp", json={"letter": letter, "signer": "Иванов И. И."}, headers=key).json()
+    assert r["status"] == "answer" and [p["model"] for p in r["positions"]] == ["АКИП-4143/1", "DT9205A"]
+    osc = r["positions"][0]
+    assert osc["fit_models"][0] == "АКИП-4143/1" and all(c["ok"] for c in osc["checks"]) and osc["checks"][0]["source"]
+    assert r["total"] == sum(p["sum"] for p in r["positions"]) and r["vat"] and "Иванов И. И." in r["letter_draft"]
+    doc = Document(io.BytesIO(base64.b64decode(r["docx_base64"])))
+    assert doc.tables[0].rows[1].cells[1].text == "Осциллограф АКИП-4143/1"
+    # выбор менеджера и письмо файлом
+    again = api.post("/tkp", headers=key, json={"choices": {"1": "АКИП-4143/2"}, "include_docx": False, "file": {
+        "name": "zapros.txt", "content_base64": base64.b64encode(letter.encode("utf-8")).decode()}}).json()
+    assert again["positions"][0]["model"] == "АКИП-4143/2" and again["docx_base64"] is None
+    assert api.post("/tkp", json={"letter": "Добрый день, как ваши дела?"}, headers=key).json()["status"] == "not_request"
+    assert api.post("/tkp", json={"file": {"name": "a.txt", "content_base64": "не base64"}}, headers=key).status_code == 422
