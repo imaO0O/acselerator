@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
-from kbagent import auth, effect, experts, prajs, tkp
+from kbagent import auth, effect, experts, prajs, tkp, tkp_registry
 from kbagent.config import settings
 from kbagent.database import column_label, display
 from kbagent.actions import log_action
@@ -246,9 +246,41 @@ def _tkp_choice(i: int, uid: str, data: dict) -> dict:
     return new
 
 
+def _tkp_approved(item: dict) -> None:
+    """Утверждённое ТКП: номер, статус и те самые Word и Excel, что сохранены в реестре."""
+    number = item["tkp_number"]
+    record = next((r for r in tkp_registry.load() if r["number"] == number), {})
+    d = record.get("date", "")
+    when = f"{d[8:10]}.{d[5:7]}.{d[:4]} {d[11:16]}" if len(d) >= 16 else d
+    st.success(f"ТКП № {number} утверждён: {record.get('approved_by', '—')}, {when}. "
+               f"Статус — {record.get('status', '—')}; сменить — на странице «Реестр ТКП».")
+    docx_path, xlsx_path = tkp_registry.files(number)
+    c1, c2 = st.columns(2)
+    if docx_path.exists():
+        c1.download_button("Скачать ТКП в Word", docx_path.read_bytes(), file_name=docx_path.name, type="primary",
+                           icon=":material/description:", width="stretch", key=f"tkp-dl-{number}",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    if xlsx_path.exists():
+        c2.download_button("Скачать в Excel", xlsx_path.read_bytes(), file_name=xlsx_path.name,
+                           icon=":material/table:", width="stretch", key=f"tkp-xl-{number}",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _approve_tkp(i: int, key: str, data: dict) -> None:
+    """Утверждение ТКП: номер из реестра, Word и Excel на бланке компании, «Эффект» и журнал — как у черновика."""
+    item = _conv()["items"][i]
+    record = tkp_registry.approve(data, st.session_state.get(key) or "", ctx()["login"], ctx()["name"],
+                                  item["role"], item.get("asked") or item["question"], APP_NAME)
+    item["tkp_number"] = record["number"]
+    _approve_draft(i, key)
+
+
 def _draft_body(i: int, uid: str) -> None:
     item = _conv()["items"][i]
     data = item.get("tkp")
+    if data and item.get("tkp_number"):
+        _tkp_approved(item)
+        return
     if data:
         data = _tkp_choice(i, uid, data)
         st.caption("Сопроводительное письмо к ТКП. Позиции, характеристики и соответствие требованиям — в таблице "
@@ -261,11 +293,15 @@ def _draft_body(i: int, uid: str) -> None:
     default = tkp.draft_text(data, ctx()["name"]) if data else draft_text(item, ctx()["name"])
     text = st.text_area("Текст", value=item.get("draft") or default, height=360, key=key,
                         label_visibility="collapsed")
+    if data:
+        st.caption("При утверждении ТКП получает номер в реестре и собирается на бланке компании — в Word и Excel.")
+        # утверждение — в обработчике: при следующей отрисовке окно покажет номер и файлы ТКП
+        st.button("Утвердить ТКП", type="primary", icon=":material/task_alt:", key=f"tkp-ok-{uid}",
+                  on_click=_approve_tkp, args=(i, key, data))
+        return
     when = time.strftime("%d.%m.%Y %H:%M")
-    doc = (tkp.tkp_docx(text, data, ctx()["name"], when, APP_NAME) if data
-           else draft_docx(text, item, ctx()["name"], when, APP_NAME))
-    st.download_button("Утвердить и скачать ТКП в Word" if data else "Утвердить и скачать Word", data=doc,
-                       file_name=f"tkp-{i + 1}.docx" if data else f"chernovik-{i + 1}.docx", type="primary",
+    doc = draft_docx(text, item, ctx()["name"], when, APP_NAME)
+    st.download_button("Утвердить и скачать Word", data=doc, file_name=f"chernovik-{i + 1}.docx", type="primary",
                        icon=":material/task_alt:",
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                        on_click=_approve_draft, args=(i, key), key=f"draft-ok-{uid}")
@@ -406,8 +442,8 @@ def render_answer(item: dict, i: int) -> None:
             help="Сомневаетесь в ответе или источники расходятся — передать вопрос эксперту"):
         expert_dialog(i, uid)
     if item.get("draft_approved"):
-        st.caption(f"{'ТКП' if item.get('tkp') else 'Черновик'} утверждён: {item['draft_approved']['by']}, "
-                   f"{item['draft_approved']['at']}")
+        kind = f"ТКП № {item['tkp_number']}" if item.get("tkp_number") else "ТКП" if item.get("tkp") else "Черновик"
+        st.caption(f"{kind} утверждён: {item['draft_approved']['by']}, {item['draft_approved']['at']}")
         stale = next((r for r in effect.affected() if r["id"] == item.get("effect_id")), None) \
             if item.get("effect_id") else None
         if stale:

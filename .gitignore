@@ -23,6 +23,8 @@ docs/registraciya/out/
 # данные партнёра (коммерческая тайна): документы, реестр, вопросы, справочник и прайс, результаты прогонов
 data/raw/partner/
 data/partner_import/
+# реестр ТКП, бланк и условия компании, утверждённые ТКП
+data/tkp/
 eval/partner*.yaml
 eval/priemka*.yaml
 eval/results/partner*

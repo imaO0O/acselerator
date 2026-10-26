@@ -70,6 +70,9 @@ class Settings:
     vat_rate: float = _env("KB_VAT_RATE", 22.0)
     prices_include_vat: bool = _env("KB_PRICES_WITH_VAT", True)
 
+    # кто готовит ТКП и видит реестр ТКП
+    tkp_roles: set = field(default_factory=lambda: {"Техпродажи и сервис", "Администратор"})
+
     # Роли и доступные им группы документов (разграничение прав, демо)
     roles: dict = field(default_factory=lambda: {
         "Инженер производства": {"all", "production"},

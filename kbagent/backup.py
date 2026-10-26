@@ -26,7 +26,7 @@ from .config import ROOT
 # что принадлежит заказчику; пути — от корня установки
 STATE = ["logs", "data/users.yaml", "data/api_keys.yaml", "data/model_api_key.txt", "data/index",
          "data/raw/uploaded", "data/raw/folder", "data/raw/partner", "data/spravochnik/pribory.csv",
-         "data/spravochnik/prajs.csv", "data/glossary.yaml", "data/pravila_raschetov.yaml"]
+         "data/spravochnik/prajs.csv", "data/glossary.yaml", "data/pravila_raschetov.yaml", "data/tkp"]
 SKIP = (".lock", ".tmp")                         # блокировка и недописанные файлы индекса
 PORTS = {8501: "чат", 8000: "REST API"}
 

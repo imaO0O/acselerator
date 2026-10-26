@@ -15,6 +15,7 @@ import io
 import math
 import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 from . import prajs
 from . import spravochnik as spr
@@ -576,26 +577,88 @@ def draft_text(t: dict, signer: str = "") -> str:
     return "\n".join(lines)
 
 
-def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: str) -> bytes:
-    """ТКП в Word: заголовок, письмо, таблица позиций (цена и сумма — для менеджера), источники, отметка."""
+PLACEHOLDER = "{{ТКП}}"          # место в бланке компании, куда встаёт содержимое ТКП
+
+
+def _blank_paragraphs(doc):
+    """Все абзацы бланка: текст, таблицы, колонтитулы — там стоят метки {{номер}}, {{дата}}, {{действует_до}}."""
+    def from_tables(tables):
+        for table in tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    yield from cell.paragraphs
+    yield from doc.paragraphs
+    yield from from_tables(doc.tables)
+    for section in doc.sections:
+        for part in (section.header, section.footer, section.first_page_header, section.first_page_footer):
+            if not part.is_linked_to_previous:
+                yield from part.paragraphs
+                yield from from_tables(part.tables)
+
+
+def _fill(doc, values: dict) -> None:
+    for p in _blank_paragraphs(doc):
+        if "{{" not in p.text:
+            continue
+        text = p.text
+        for key, value in values.items():
+            text = text.replace("{{" + key + "}}", value)
+        if text != p.text and p.runs:                  # формат — первого фрагмента абзаца
+            for r in p.runs[1:]:
+                r._r.getparent().remove(r._r)
+            p.runs[0].text = text
+
+
+def _grid(table) -> None:
+    """Сетка таблицы: стиль «Table Grid», а если его нет в бланке компании — границы напрямую."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    try:
+        table.style = "Table Grid"
+        return
+    except (KeyError, ValueError):
+        pass
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), "4")
+        el.set(qn("w:color"), "000000")
+        borders.append(el)
+    table._tbl.tblPr.append(borders)
+
+
+def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: str, number: str = "",
+             terms: dict | None = None, blank: Path | None = None) -> bytes:
+    """ТКП в Word: заголовок с номером и сроком действия, письмо, таблица позиций, условия, источники, отметка.
+    blank — бланк компании (шапка, реквизиты, логотип, колонтитулы): ТКП встаёт на место метки {{ТКП}}, а если
+    её нет — после текста бланка; метки {{номер}}, {{дата}}, {{действует_до}} заполняются. terms — valid_until,
+    payment, delivery."""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm, Mm, Pt, RGBColor
 
     from .export import _runs
-    doc = Document()
-    for section in doc.sections:
-        section.page_width, section.page_height = Mm(210), Mm(297)
-        section.left_margin, section.right_margin = Mm(20), Mm(10)
-        section.top_margin, section.bottom_margin = Mm(20), Mm(20)
-    style = doc.styles["Normal"]
-    style.font.name, style.font.size = "Times New Roman", Pt(12)
-    style.paragraph_format.space_after = Pt(0)
+    terms = terms or {}
+    doc = Document(str(blank)) if blank and blank.exists() else Document()
+    if not (blank and blank.exists()):
+        for section in doc.sections:
+            section.page_width, section.page_height = Mm(210), Mm(297)
+            section.left_margin, section.right_margin = Mm(20), Mm(10)
+            section.top_margin, section.bottom_margin = Mm(20), Mm(20)
+        style = doc.styles["Normal"]
+        style.font.name, style.font.size = "Times New Roman", Pt(12)
+        style.paragraph_format.space_after = Pt(0)
+    _fill(doc, {"номер": number or "____", "дата": approved_at[:10], "действует_до": terms.get("valid_until", "")})
+    anchor = next((p for p in doc.paragraphs if PLACEHOLDER in p.text), None)
+    before = list(doc.element.body)
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run("ТЕХНИКО-КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ")
     run.bold = True
-    doc.add_paragraph(f"№ ____ от {approved_at[:10]}").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(f"№ {number or '____'} от {approved_at[:10]}").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if terms.get("valid_until"):
+        doc.add_paragraph(f"Предложение действительно до {terms['valid_until']}").alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph()
     lines = text.splitlines()
     # таблица позиций — перед подписью («С уважением, …»), как в обычном ТКП
@@ -610,7 +673,7 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
     paragraphs(lines[:cut])
     doc.add_paragraph()
     table = doc.add_table(rows=1, cols=6)
-    table.style = "Table Grid"
+    _grid(table)
     for cell, head in zip(table.rows[0].cells, ["№", "Наименование", "Кол-во, шт.", "Соответствие требованиям",
                                                 "Цена за ед., ₽", "Сумма, ₽"]):
         cell.text = head
@@ -649,6 +712,14 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
             for par in cell.paragraphs:
                 for r in par.runs:
                     r.font.size = Pt(10)
+    conditions = [(label, terms.get(key)) for key, label in (("payment", "Условия оплаты"),
+                                                             ("delivery", "Условия поставки")) if terms.get(key)]
+    if conditions:
+        doc.add_paragraph()
+        for label, value in conditions:
+            p = doc.add_paragraph()
+            p.add_run(f"{label}: ").bold = True
+            p.add_run(value)
     if t.get("sources"):
         doc.add_paragraph()
         for line in ["Источники характеристик:"] + [f"[{s['n']}] {s['label']}" for s in t["sources"]]:
@@ -671,6 +742,74 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
                        f"параметров со ссылками на руководства. {prices} "
                        f"Утвердил: {approved_by}, {approved_at}.")
     run.italic, run.font.color.rgb, run.font.size = True, RGBColor(0x5C, 0x54, 0x70), Pt(10)
+    if anchor is not None:                    # содержимое ТКП — на место метки в бланке
+        for el in [e for e in doc.element.body if not any(e is b for b in before)]:
+            anchor._p.addprevious(el)
+        anchor._p.getparent().remove(anchor._p)
     buf = io.BytesIO()
     doc.save(buf)
+    return buf.getvalue()
+
+
+def tkp_xlsx(t: dict, number: str, date: str, terms: dict | None = None, company: str = "") -> bytes:
+    """ТКП в Excel — для закупщиков, которые сравнивают предложения таблицей: позиции, соответствие требованиям,
+    цена, сумма, итог и НДС; источники характеристик — на втором листе."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    terms = terms or {}
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ТКП"
+    head = [company, f"Технико-коммерческое предложение № {number or '____'} от {date}",
+            f"Действительно до {terms['valid_until']}" if terms.get("valid_until") else ""]
+    for text in filter(None, head):
+        ws.append([text])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+    ws.append([])
+    columns = ["№", "Наименование", "Кол-во, шт.", "Соответствие требованиям", "Цена за ед., ₽", "Сумма, ₽",
+               "Срок поставки"]
+    ws.append(columns)
+    for c in ws[ws.max_row]:
+        c.font, c.fill = Font(bold=True), PatternFill("solid", fgColor="E9E4F3")
+    for p in t["positions"]:
+        offered = p["status"] in ("offer", "named")
+        checks = "\n".join(f"{c['param'][:1].upper() + c['param'][1:]}: {c['value'] or 'нет данных'}"
+                           + (" — соответствует" if c["ok"] else " — не соответствует" if c["ok"] is False else "")
+                           + (f" (требование: {c['need']})" if c["need"] else "") for c in p["checks"])
+        price = p.get("price") if offered else None
+        ws.append([p["n"], f"{p['kind']} {p['model']}" if offered else p["kind"], p["qty"],
+                   checks or p.get("note", ""), price, price * p["qty"] if price else None,
+                   p.get("lead", "") if offered else ""])
+    priced = _priced(t["positions"])
+    if priced:
+        total = sum(p["price"] * p["qty"] for p in priced)
+        vat, gross = _vat(total)
+        ws.append(["", "Итого по прайсу", "", "", "", total])
+        ws.cell(row=ws.max_row, column=2).font = ws.cell(row=ws.max_row, column=6).font = Font(bold=True)
+        if spr.settings.vat_rate:
+            if spr.settings.prices_include_vat:
+                ws.append(["", f"в т. ч. НДС {_rate()} %", "", "", "", vat])
+            else:
+                ws.append(["", f"НДС {_rate()} %", "", "", "", vat])
+                ws.append(["", "Всего с НДС", "", "", "", gross])
+        else:
+            ws.append(["", "Без НДС"])
+    for key, label in (("payment", "Условия оплаты"), ("delivery", "Условия поставки")):
+        if terms.get(key):
+            ws.append([])
+            ws.append([f"{label}: {terms[key]}"])
+    for row in ws.iter_rows():
+        for c in row:
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            if c.column in (5, 6) and isinstance(c.value, (int, float)):
+                c.number_format = "#,##0.00"
+    for col, width in zip("ABCDEFG", (5, 34, 10, 60, 14, 14, 16)):
+        ws.column_dimensions[col].width = width
+    src = wb.create_sheet("Источники")
+    src.append(["№", "Источник характеристик"])
+    for s in t.get("sources", []):
+        src.append([s["n"], s["label"]])
+    src.column_dimensions["B"].width = 100
+    buf = io.BytesIO()
+    wb.save(buf)
     return buf.getvalue()

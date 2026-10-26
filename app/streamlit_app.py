@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 from app.ui_admin import admin_page  # noqa: E402
 from app.ui_chat import chat_page  # noqa: E402
 from app.ui_common import APP_NAME, LOGO, inject_css  # noqa: E402
+from app.ui_tkp import registry_page  # noqa: E402
 from kbagent import auth  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.config import settings  # noqa: E402
@@ -93,10 +94,12 @@ else:
 
 ctx = st.session_state.ctx
 pages = [st.Page(chat_page, title="Чат", icon=":material/forum:", default=True)]
+if ctx["role"] in settings.tkp_roles:
+    pages.append(st.Page(registry_page, title="Реестр ТКП", icon=":material/request_quote:", url_path="tkp"))
 if ctx["is_admin"]:
     pages.append(st.Page(admin_page, title="Администрирование", icon=":material/admin_panel_settings:",
                          url_path="admin"))
-st.navigation(pages, position="sidebar" if ctx["is_admin"] else "hidden").run()
+st.navigation(pages, position="sidebar" if len(pages) > 1 else "hidden").run()
 
 with st.sidebar:
     st.divider()
