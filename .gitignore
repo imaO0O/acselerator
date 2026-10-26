@@ -28,6 +28,7 @@ data/tkp/
 # входящие запросы из почты и пароль ящика
 data/mail/
 data/mail_password.txt
+data/1c_password.txt
 eval/partner*.yaml
 eval/priemka*.yaml
 eval/results/partner*

@@ -18,7 +18,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import backup, demand, effect, experts, folder_sync, prajs, spravochnik, tkp_registry
+from kbagent import backup, demand, effect, experts, folder_sync, onec, prajs, spravochnik, tkp_registry
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -365,6 +365,7 @@ def price_list() -> None:
                    + "; ".join(f"{x['model']}: {', '.join(x['prices'])}" for x in rep.conflicts))
     if rep.unknown:
         st.info("Этих моделей нет в справочнике параметров — в ТКП они не попадут: " + ", ".join(rep.unknown))
+    price_from_1c()
     with st.container(border=True):
         st.markdown("**Загрузить новый прайс**")
         st.caption("Файл проверяется до замены: пропуски, цены, даты, разные цены одной модели. Без колонки "
@@ -395,6 +396,47 @@ def price_list() -> None:
         st.dataframe(df, hide_index=True, width="stretch", height=300)
         st.download_button("Скачать прайс (CSV)", prajs.PATH.read_bytes(), file_name="prajs.csv",
                            icon=":material/download:", key="prajs-dl")
+
+
+def price_from_1c() -> None:
+    """Цены и остатки из 1С — только чтение; отчёт последнего обновления."""
+    with st.container(border=True):
+        st.markdown("**Цены из 1С**")
+        c = onec.conf()
+        if not onec.configured():
+            st.caption("Не подключено. Цены (и остатки) можно брать из 1С вместо файла — только чтение, через "
+                       "стандартный интерфейс OData: KB_1C_URL (…/odata/standard.odata), KB_1C_USER, пароль — "
+                       "KB_1C_PASSWORD или data/1c_password.txt, KB_1C_PRICE_TYPE — тип цен, KB_1C_CONFIG — bp "
+                       "(Бухгалтерия 3.0) или ut (УТ 11, КА 2, ERP), KB_1C_STOCK=1 — остатки. Что опубликовать в "
+                       "1С — `docs/vnedrenie.md`.")
+            return
+        st.caption(f"{c['title']} · тип цен «{c['price_type']}»" + (" · остатки" if c["stock_on"] else "")
+                   + ". Номенклатура сопоставляется с моделями справочника по артикулу или наименованию; срок "
+                   "поставки — «в наличии», если есть остаток, иначе — как в прайсе. В 1С ничего не меняется.")
+        if st.button("Обновить цены из 1С", icon=":material/sync:", key="prajs-1c"):
+            try:
+                with st.spinner("Читаю 1С…"):
+                    rep = onec.sync()
+                log_action("prajs_1c", ctx()["login"], rep["price_type"],
+                           f"цен: {rep['prices']}; без цены: {len(rep['without_price'])}")
+                st.session_state.onec_note = ("success", f"Из 1С загружено цен: {rep['prices']}.")
+            except onec.OneCError as e:
+                st.session_state.onec_note = ("error", str(e))
+            st.rerun()
+        if note := st.session_state.pop("onec_note", None):
+            getattr(st, note[0])(note[1])
+        rep = onec.last_report()
+        if not rep:
+            return
+        st.caption(f"Последнее обновление: {display(rep['time'])[:16]} · сервер {rep['server']} · номенклатуры "
+                   f"в 1С: {rep['items']} · сопоставлено с моделями: {rep['matched']}")
+        for w in rep["warnings"]:
+            st.warning(w, icon=":material/warning:")
+        if rep["ambiguous"]:
+            st.info("Позиции 1С подходят сразу к нескольким моделям — не загружены (уточните наименование или "
+                    "артикул): " + "; ".join(rep["ambiguous"][:8]))
+        if rep["foreign"]:
+            st.info("Цена в валюте — не подставляется: " + ", ".join(rep["foreign"][:8]))
 
 
 def expert_queue() -> None:
