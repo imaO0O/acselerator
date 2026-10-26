@@ -88,7 +88,8 @@ def client_of(letter: str) -> str:
 
 
 def _file(number: str, ext: str) -> Path:
-    return FILES / f"{re.sub(r'[^\w-]+', '_', number)}.{ext}"
+    safe = re.sub(r"[^\w-]+", "_", number)          # вне f-строки: в Python 3.11 «\» в выражении f-строки нельзя
+    return FILES / f"{safe}.{ext}"
 
 
 def files(number: str) -> tuple[Path, Path]:

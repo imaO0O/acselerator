@@ -8,12 +8,21 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    # продукт работает на Windows (поставка — Python 3.12), README обещает Python 3.11+; Linux — к версии для
+    # Astra Linux и РЕД ОС
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
       - run: pip install -r requirements-dev.txt
+      # синтаксис всех файлов — и тех, что автотесты не импортируют (скрипты, сборка документов)
+      - run: python -m compileall -q kbagent app api scripts eval docs tests
       - run: python -m pytest tests -q
