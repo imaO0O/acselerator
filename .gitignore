@@ -31,6 +31,9 @@ data/mail_password.txt
 eval/partner*.yaml
 eval/priemka*.yaml
 eval/results/partner*
+# прогоны проверки ветки (scripts/check_branch.py); сам отчёт можно закоммитить
+eval/results/check_*
+!eval/results/check_branch.md
 eval/results/priemka*
 *_oshibki.csv
 
