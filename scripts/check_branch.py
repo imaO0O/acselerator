@@ -22,9 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "eval" / "results"
 SETS = {"latest": "eval/questions.yaml", "jury": "eval/jury.yaml", "roles": "eval/roles.yaml",
-        "spravochnik": "eval/spravochnik.yaml", "tkp": "eval/tkp.yaml", "testers": "eval/testers.yaml"}
+        "spravochnik": "eval/spravochnik.yaml", "tkp": "eval/tkp.yaml", "testers": "eval/testers.yaml",
+        "svezhie": "eval/svezhie.yaml"}
 TITLES = {"latest": "эталон", "jury": "вопросы «с ходу»", "roles": "роли", "spravochnik": "справочник",
-          "tkp": "письма → ТКП", "testers": "приёмы участника 2"}
+          "tkp": "письма → ТКП", "testers": "приёмы участника 2", "svezhie": "свежие вопросы"}
 
 
 def parse(text: str | None) -> dict[str, dict] | None:

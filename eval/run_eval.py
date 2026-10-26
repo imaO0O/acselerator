@@ -142,6 +142,9 @@ def main():
             row["correct"] = r.status == "clarify"
         elif q["type"] == "info":
             row["correct"] = r.status == "info" and r.route == "help"
+        elif q["type"] == "price":                           # цена или наличие из прайса (1С), без модели
+            row["correct"] = (r.answered and r.route == "prajs" and has_facts(evidence, must)
+                              and has_none(r.text, q.get("must_exclude", [])))
         else:
             row["correct"] = (r.answered and r.route == "database" and has_facts(evidence, must)
                               and has_none(r.text, q.get("must_exclude", [])))
@@ -155,6 +158,7 @@ def main():
     both = [r for r in rows if r["type"] == "both"]
     clarify = [r for r in rows if r["type"] == "clarify"]
     info = [r for r in rows if r["type"] == "info"]
+    price = [r for r in rows if r["type"] == "price"]
     answered = [r for r in doc + none if r["status"] == "answer"]
     count = lambda items, key="correct": f"{sum(bool(r.get(key)) for r in items)} из {len(items)}"  # noqa: E731
     m = {
@@ -171,6 +175,7 @@ def main():
         "Ответов по базе и документам вместе": count(both),
         "Встречных вопросов на слишком общий вопрос": count(clarify),
         "Справок на разговорные вопросы («привет», «что ты умеешь»)": count(info),
+        "Ответов о цене и наличии из прайса": count(price),
         "Время ответа, медиана": f"{statistics.median(r['seconds'] for r in rows):.1f} с",
         "Время ответа, максимум": f"{max(r['seconds'] for r in rows):.1f} с",
     }
@@ -179,7 +184,7 @@ def main():
     groups = []
     for g in [g for g in GROUPS if any(r["group"] == g for r in rows)]:
         cells = []
-        for items in (doc, none, db, both + clarify + info):
+        for items in (doc, none, db, both + clarify + info + price):
             gi = [r for r in items if r["group"] == g]
             cells.append(count(gi) if gi else "—")
         groups.append(f"| {g} | " + " | ".join(cells) + " |")
@@ -193,7 +198,7 @@ def main():
           "| Метрика | Значение |", "|---|---|"]
     md += [f"| {k} | {v} |" for k, v in m.items()]
     md += ["", "По группам вопросов:", "",
-           "| Группа | Верные ответы | Верные отказы | Учётная база | База + документы, уточнения, справки |",
+           "| Группа | Верные ответы | Верные отказы | Учётная база | База + документы, уточнения, справки, цены |",
            "|---|---|---|---|---|"] + groups
     md += ["", "| № | Группа | Вопрос | Итог | Статус | Время, с | Источник |", "|---|---|---|---|---|---|---|"]
     for r in rows:

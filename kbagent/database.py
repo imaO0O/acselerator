@@ -569,6 +569,22 @@ def _total_line(question: str, columns: list, rows: list) -> str:
     return f"Всего: {display(total)}{f' {unit}' if unit else ''} (записей: {len(rows)})."
 
 
+COUNT_SQL_RE = re.compile(r"^\s*select\s+count\s*\(\s*(?:\*|distinct\s+[\w.]+|[\w.]+)\s*\)", re.I)
+
+
+def _count_answer(sql: str, columns: list, rows: list) -> str | None:
+    """«Сколько заявок на ремонт открыто?» → «Заявки на ремонт оборудования (новая, в работе): 3» — итог COUNT
+    одной строкой: что считали (таблица из слоя названий) и по какому отбору; модель число не пересказывает."""
+    if len(rows) != 1 or len(columns) != 1 or not COUNT_SQL_RE.match(sql) or not isinstance(rows[0][0], int):
+        return None
+    table = re.search(r"\bfrom\s+(\w+)", sql, re.I)
+    title = next((t["title"] for t in SCHEMA["tables"] if table and t["name"] == table.group(1)), "записей")
+    where = re.split(r"\bwhere\b", sql, maxsplit=1, flags=re.I)
+    values = [v for v in re.findall(r"'([^'%]*)'", where[1]) if re.search("[а-яё]", v, re.I)] if len(where) > 1 else []
+    picked = f" ({', '.join(dict.fromkeys(values))})" if values else ""
+    return f"{title[:1].upper()}{title[1:]}{picked}: {rows[0][0]}"
+
+
 def answer_from_database(question: str, db_path: Path, records: list[str] | None = None,
                          near: bool = False) -> DbAnswer:
     """records — номера записей из вопроса «запись + правило» («СИ-0012 просрочен — можно ли…»).
@@ -595,7 +611,7 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
         except llm.ModelError as e:
             return DbAnswer("error", f"Языковая модель недоступна: {e}")
         stats["sql_seconds"] = s1["seconds"]
-        if "НЕТ_ДАННЫХ" in raw:
+        if "НЕТ_ДАННЫХ" in raw.upper():
             return DbAnswer("no_data", "В учётной базе нет данных для ответа на этот вопрос.", stats=stats)
         sql = _fuzzy_text(_fix_dates(_repair_aliases(_extract_sql(raw))))
     error = None
@@ -624,10 +640,14 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
         if near_answer:
             return near_answer
     labels = _labels(sql, columns)
+    if count := _count_answer(sql, columns, rows):           # число — программой, без пересказа моделью
+        stats["count_template"] = True
+        return DbAnswer("answer", f"{count} [БД]", sql=sql, columns=columns, rows=[list(r) for r in rows],
+                        stats=stats, labels=labels)
     text, s2 = llm.chat([{"role": "user", "content": ANSWER_PROMPT.format(
         question=question, count=len(rows), table=_table(labels, rows))}], max_tokens=400)
     stats.update(answer_seconds=s2["seconds"], tokens_per_second=s2.get("tokens_per_second"))
-    if "НЕТ_ДАННЫХ" in text:
+    if "НЕТ_ДАННЫХ" in text.upper():
         return DbAnswer("no_data", "Записи учёта не отвечают на этот вопрос.", sql=sql, columns=columns,
                         rows=[list(r) for r in rows], stats=stats)
     bad = _unsupported_numbers(text, rows, question)
@@ -650,7 +670,7 @@ def answer_from_database(question: str, db_path: Path, records: list[str] | None
                                                 f"{', '.join(bad)}. Перепиши ответ, используя только значения "
                                                 "из таблицы, ничего не складывая и не придумывая."}]
         text, _ = llm.chat(messages, max_tokens=400)
-        if _unsupported_numbers(text, rows, question) or "НЕТ_ДАННЫХ" in text:
+        if _unsupported_numbers(text, rows, question) or "НЕТ_ДАННЫХ" in text.upper():
             stats["unsupported_numbers"] = True
             return DbAnswer("no_data", "Ответ по учётной базе не подтвердился записями.", sql=sql, columns=columns,
                             rows=[list(r) for r in rows], stats=stats)

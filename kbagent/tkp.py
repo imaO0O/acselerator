@@ -30,8 +30,11 @@ OTHER_RE = re.compile(r"источник\w*\s+питани\w*|блок\w*\s+пи
                       r"вольтметр\w*|амперметр\w*|калибратор\w*|электронн\w*\s+нагрузк\w*|паяльн\w*\s+ванн\w*|"
                       r"микроскоп\w*|дымоуловител\w*|вытяжк\w*|щуп\w*|пробник\w*", re.I)
 SEP_RE = re.compile(r"[.;:!?\n]+\s*|,\s+|\s(?:и|а\s+также|также|плюс|ещё|еще|кроме\s+того)\s", re.I)
-WORD_NUM = {"один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6,
-            "семь": 7, "восемь": 8, "девять": 9, "десять": 10}
+WORD_NUM = {"один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2, "пару": 2, "пара": 2, "пары": 2, "три": 3,
+            "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10, "десяток": 10}
+# «В прошлый раз брали у вас 3 паяльные станции» — рассказ о прошлой покупке, а не позиция запроса
+PAST_RE = re.compile(r"\b(?:брали|покупали|купили|приобрел[иа]?|приобретали|заказывали|закупали|получали)\b", re.I)
+REQUEST_RE = re.compile(r"\b(?:нуж[не]\w*|прошу|просим|просьба|предлож\w*|требу\w*|необходим\w*|интерес\w*)\b", re.I)
 QTY_BEFORE_RE = re.compile(rf"(?:^|\s)(\d{{1,3}}|{'|'.join(WORD_NUM)})\s+(?:[а-яё]+\s+)?$", re.I)
 QTY_RE = re.compile(r"(\d{1,3})\s*(?:шт\b\.?|штук\w*|ед\.|единиц\w*|комплект\w*)", re.I)
 # строка таблицы из Word или Excel: «Мультиметр | переменное напряжение до 750 В | 5» — количество в последней ячейке
@@ -198,7 +201,8 @@ def parse(text: str, allowed: set[str], chosen: dict | None = None) -> Tkp | Non
         return index[k]
 
     positions, pending = [], []
-    for n, (seg, kind, qty) in enumerate(_segments(text, anchors), 1):
+    segments = [s for s in _segments(text, anchors) if not (PAST_RE.search(s[0]) and not REQUEST_RE.search(s[0]))]
+    for n, (seg, kind, qty) in enumerate(segments, 1):
         pos = Position(n, seg, kind or _other_name(seg), qty)
         positions.append(pos)
         if not kind:
