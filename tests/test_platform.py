@@ -384,3 +384,46 @@ def test_effect_counts_time_to_approval_and_flags_stale_answers(tmp_settings, tm
     stale = [r for r in effect.affected() if r["question"] == "Какая частота?"]
     assert stale and "эксперт исправил значение" in stale[0]["reasons"][0]
     assert not [r for r in effect.affected() if r["question"] == "Полоса?"]
+
+
+def test_model_requests_carry_api_key(tmp_path, monkeypatch):
+    from kbagent import llm
+    from kbagent.config import settings
+
+    sent = []
+
+    class Reply:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    def fake_post(url, json, headers, timeout):
+        sent.append(headers)
+        return Reply()
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.delenv("KB_MODEL_KEY", raising=False)
+    monkeypatch.setattr(settings, "model_key_path", tmp_path / "model_api_key.txt")
+    llm._post("http://127.0.0.1:8080/v1/x", {})
+    assert sent[-1] == {}                                   # ключа нет — серверы запущены без него
+    (tmp_path / "model_api_key.txt").write_text("abc123\n", encoding="utf-8")
+    llm._post("http://127.0.0.1:8080/v1/x", {})
+    assert sent[-1] == {"Authorization": "Bearer abc123"}   # ключ из файла, без перевода строки
+    monkeypatch.setenv("KB_MODEL_KEY", "enterprise")
+    llm._post("http://127.0.0.1:8080/v1/x", {})
+    assert sent[-1] == {"Authorization": "Bearer enterprise"}
+
+
+def test_rejected_model_key_is_explained(monkeypatch):
+    import pytest
+    from kbagent import llm
+
+    class Reply:
+        status_code = 401
+        text = "Invalid API Key"
+
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: Reply())
+    with pytest.raises(llm.ModelError, match="ключ доступа"):
+        llm._post("http://127.0.0.1:8080/v1/x", {})

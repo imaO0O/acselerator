@@ -21,6 +21,9 @@ class Settings:
     embed_url: str = _env("KB_EMBED_URL", "http://127.0.0.1:8081/v1")
     rerank_url: str = _env("KB_RERANK_URL", "http://127.0.0.1:8082/v1")
     use_reranker: bool = _env("KB_USE_RERANKER", True)
+    # Ключ доступа к серверам моделей: создаёт scripts/start_servers при первом запуске и передаёт серверам
+    # файлом; без ключа серверы отвечают 401. KB_MODEL_KEY — ключ внешнего сервера моделей предприятия.
+    model_key_path: Path = ROOT / "data" / "model_api_key.txt"
 
     # данные
     raw_dir: Path = ROOT / "data" / "raw"
@@ -67,6 +70,13 @@ class Settings:
         "Техпродажи и сервис": {"all"},
         "Администратор": {"all", "production", "metrology", "admin"},
     })
+
+    @property
+    def model_api_key(self) -> str:
+        key = os.environ.get("KB_MODEL_KEY")
+        if key is None and self.model_key_path.exists():
+            key = self.model_key_path.read_text(encoding="utf-8")
+        return (key or "").strip()
 
 
 settings = Settings()

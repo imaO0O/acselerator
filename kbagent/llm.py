@@ -18,11 +18,19 @@ class ModelError(RuntimeError):
     pass
 
 
+def _headers() -> dict:
+    key = settings.model_api_key
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 def _post(url: str, payload: dict) -> dict:
     try:
-        r = requests.post(url, json=payload, timeout=settings.request_timeout)
+        r = requests.post(url, json=payload, headers=_headers(), timeout=settings.request_timeout)
     except requests.RequestException as e:
         raise ModelError(f"Сервер модели недоступен: {url} ({e.__class__.__name__})") from e
+    if r.status_code == 401:
+        raise ModelError(f"{url}: сервер модели отклонил ключ доступа ({settings.model_key_path.name}). "
+                         "Перезапустите серверы: scripts\\stop_servers.bat, затем scripts\\start_servers.bat")
     if r.status_code != 200:
         raise ModelError(f"{url}: HTTP {r.status_code} {r.text[:300]}")
     return r.json()

@@ -1,6 +1,8 @@
 ﻿# Запускает три сервера llama.cpp в фоне: языковая модель (8080),
 # векторы bge-m3 (8081), переранжировщик bge-reranker-v2-m3 (8082).
 # Логи пишутся в папку logs. Остановка: scripts\stop_servers.bat
+# Серверы принимают запросы только с ключом доступа: он создаётся при первом запуске в data\model_api_key.txt
+# и передаётся серверам файлом (в списке процессов его не видно). Новый ключ — удалить файл и перезапустить.
 #   scripts\start_servers.bat              — с видеокартой (4 параллельных слота)
 #   scripts\start_servers.bat -Cpu         — только процессор (ноутбук): профиль, подобранный замерами
 #   scripts\start_servers.bat -Cpu -Threads 8   — число потоков вручную (по умолчанию — все логические)
@@ -13,6 +15,15 @@ $bin = Join-Path $root "tools\llama.cpp\llama-server.exe"
 $models = Join-Path $root "models"
 $logs = Join-Path $root "logs"
 New-Item -ItemType Directory -Force $logs | Out-Null
+
+$keyFile = Join-Path $root "data\model_api_key.txt"
+if (-not (Test-Path $keyFile)) {
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $key = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+    [System.IO.File]::WriteAllText($keyFile, $key, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Создан ключ доступа к серверам моделей: data\model_api_key.txt"
+}
 
 if (-not (Test-Path $bin)) {
     Write-Host "Не найден $bin. Сначала выполните: python scripts\setup.py" -ForegroundColor Red
@@ -60,7 +71,7 @@ function Test-Health($port) {
 
 foreach ($s in $servers) {
     if (Test-Health $s.Port) { Write-Host "$($s.Name): уже работает на порту $($s.Port)"; continue }
-    $argList = ($s.Args + @("--host", "127.0.0.1", "--port", "$($s.Port)")) |
+    $argList = ($s.Args + @("--host", "127.0.0.1", "--port", "$($s.Port)", "--api-key-file", $keyFile)) |
         ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
     Start-Process -FilePath $bin -ArgumentList $argList -WindowStyle Hidden `
         -RedirectStandardOutput (Join-Path $logs "$($s.Name).out.log") `

@@ -24,6 +24,8 @@ data/demo_db/dates.json
 
 # ключи API (только хэши) — выпускаются на месте установки
 data/api_keys.yaml
+# ключ доступа к серверам моделей — создаётся при первом запуске start_servers
+data/model_api_key.txt
 
 # справочник параметров: отчёт о загрузке и предыдущая версия файла — производные
 data/spravochnik/import.json
