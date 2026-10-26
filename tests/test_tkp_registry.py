@@ -93,3 +93,22 @@ def test_without_blank_tkp_is_built_as_before(reg):
     body = [p.text for p in Document(reg.files(rec["number"])[0]).paragraphs if p.text.strip()]
     assert body[0] == "ТЕХНИКО-КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ" and body[1] == f"№ {rec['number']} от 26.10.2026"
     assert "Предложение действительно до 25.11.2026" in body          # срок действия по умолчанию — 30 дней
+
+
+def test_revision_and_reminders(reg):
+    first = approve(reg, dt.datetime(2026, 10, 1, 10, 0))
+    t = tkp.parse(LETTER, {"all"}).to_dict()
+    rev = reg.approve(t, tkp.draft_text(t, "М"), "m", "Менеджер", "Техпродажи и сервис", LETTER, "Агент",
+                      now=dt.datetime(2026, 10, 2, 10, 0), revision_of=first["number"])
+    assert rev["number"] == "ТКП-2026-0001/1" and rev["revision_of"] == first["number"]
+    old = next(r for r in reg.load() if r["number"] == first["number"])
+    assert old["status"] == "заменён" and reg.summary(reg.load())["count"] == 1
+    assert approve(reg, dt.datetime(2026, 10, 3, 10, 0))["number"] == "ТКП-2026-0002"   # редакция не тратит номер
+    reg.set_status(rev["number"], "отправлен клиенту", "m", "Менеджер")
+    found = {(a["record"]["number"], a["kind"]) for a in reg.attention(reg.load(), today=dt.date.today()
+                                                                         + dt.timedelta(days=40))}
+    assert (rev["number"], "expired") in found and (rev["number"], "silent") in found
+    text = reg.reminder_text(next(r for r in reg.load() if r["number"] == rev["number"]), "Менеджер")
+    assert rev["number"] in text and "АКИП-4143/1" in text
+    reg.note(rev["number"], "напомнили клиенту", "m", "Менеджер")
+    assert next(r for r in reg.load() if r["number"] == rev["number"])["history"][-1]["comment"] == "напомнили клиенту"
