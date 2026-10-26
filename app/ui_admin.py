@@ -18,7 +18,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import effect, experts, folder_sync, prajs, spravochnik
+from kbagent import backup, effect, experts, folder_sync, prajs, spravochnik
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -567,6 +567,25 @@ def system() -> None:
         st.markdown(f"**База знаний:** {meta['documents']} документов, {meta['chunks']} фрагментов, "
                     f"обновлена {meta['built']}.")
     st.markdown("Все модели работают на этом компьютере, доступ в интернет не нужен.")
+    with st.container(border=True):
+        st.markdown("**Резервная копия данных**")
+        st.caption("Учётные записи и ключи, журналы, диалоги, решения эксперта, загруженные документы и папка "
+                   "отдела, справочник, прайс и индекс — архив с контрольными суммами в папке backups (хранятся 10 "
+                   "последних). В архиве хэши паролей и журналы вопросов — храните его по правилам службы "
+                   "безопасности. Восстановление и перенос в новую версию — scripts\backup.py restore.")
+        if st.button("Создать резервную копию", icon=":material/backup:", key="backup-create"):
+            with st.spinner("Собираю архив…"):
+                path = backup.create()
+            log_action("backup", ctx()["login"], path.name, backup.summary(backup.verify(path)))
+            st.session_state.backup_path = str(path)
+        if st.session_state.get("backup_path") and Path(st.session_state.backup_path).exists():
+            path = Path(st.session_state.backup_path)
+            st.success(f"Готово: {path.name}")
+            st.download_button("Скачать архив", path.read_bytes(), file_name=path.name, mime="application/zip",
+                               icon=":material/download:", key="backup-dl")
+        archives = sorted((ROOT / "backups").glob("agent_backup_*.zip"), reverse=True)[:5]
+        if archives:
+            st.caption("Последние: " + "; ".join(f"{p.name} ({p.stat().st_size / 2**20:.1f} МБ)" for p in archives))
     for title, name in [("Скорость", "speed_DESKTOP-QMSBN1F.md"), ("Одновременные пользователи", "load.md"),
                         ("Масштаб поиска", "scale.md")]:
         path = ROOT / "eval" / "results" / name

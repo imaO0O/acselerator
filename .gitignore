@@ -3,6 +3,9 @@ models/
 tools/
 *.gguf
 
+# резервные копии данных заказчика (scripts/backup.py) — хэши паролей и журналы
+backups/
+
 # производные данные
 data/index/
 logs/
