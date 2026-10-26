@@ -240,11 +240,34 @@ NOT_PARAM_RE = re.compile(r"окружающ\w*|в\s+помещени\w*|воз�
 PRICE_RE = re.compile(r"стоит|стоимост\w*|\bцен[аыуе]?\b|прайс", re.I)
 REQ_RE = re.compile(rf"({NUM})\s*(ГГц|МГц|кГц|Гц|Гвыб/с|Мвыб/с|кВ|мВ|В|мкА|мА|А|МОм|кОм|Ом|°\s?[CС]|градус\w*|"
                     rf"кВт|Вт|ВА|пс|нс|мкс|мс|кг|г)(?![А-Яа-яA-Za-z])")
-CHANNELS_RE = re.compile(r"(\d+)\s*-?\s*(?:х\s*)?канал\w*|(двух|трёх|трех|четырёх|четырех)\s*канальн\w*", re.I)
+CHANNELS_RE = re.compile(r"(\d+)\s*-?\s*(?:х\s*)?канал\w*|(двух|трёх|трех|четырёх|четырех)\s*канальн\w*|"
+                         # «каналов ≥ 4», «число каналов не менее 4», «каналов: 4» — число после слова
+                         r"канал\w*\s*(?:≥|>=|:|не\s+менее|не\s+меньше|минимум|от)\s*(\d+)(?!\d)(?!\s*шт)", re.I)
+# Как пишут в письмах: опечатки в видах продукции, «МГЦ», единицы латиницей. Однобуквенные латинские единицы —
+# только через пробел: «10 A» — ток, а «DT9205A» — модель.
+TYPO_FIXES = [(re.compile(r"осц[иы]л{1,2}о?граф", re.I), "осциллограф"),
+              (re.compile(r"мульт[иы]мет[еи]?р", re.I), "мультиметр")]
+HZ_RE = re.compile(r"(\d)\s*([кКмМгГ]?)[гГ][цЦ](?![а-яё])")
+LATIN_UNITS = {"GHz": "ГГц", "GHZ": "ГГц", "MHz": "МГц", "MHZ": "МГц", "kHz": "кГц", "KHz": "кГц", "Hz": "Гц",
+               "kV": "кВ", "mV": "мВ", "mA": "мА", "kW": "кВт", "MOhm": "МОм", "kOhm": "кОм", "Ohm": "Ом",
+               "ns": "нс", "ps": "пс", "kg": "кг"}
+LATIN_SHORT = {"A": "А", "V": "В", "W": "Вт"}
+LATIN_RE = re.compile(rf"(?<![\w/.-])({NUM})\s*({'|'.join(sorted(LATIN_UNITS, key=len, reverse=True))})(?![A-Za-z])"
+                      rf"|(?<![\w/.-])({NUM})\s+([AVW])(?![\w])")
 WORD_NUM = {"двух": 2, "трёх": 3, "трех": 3, "четырёх": 4, "четырех": 4}
 # у этих параметров «лучше меньше»: требование «X» — значит не больше X
 SMALLER_BETTER = {"Время нарастания", "Масса", "Потребляемая мощность", "Стабильность температуры паяльника"}
 RANGE_PARAMS = {"Температура жала паяльника", "Температура фена"}
+
+
+def normalize(text: str) -> str:
+    """Письмо или вопрос — к написанию справочника: «осцилограф» → «осциллограф», «150 MHz» → «150 МГц»."""
+    for rx, right in TYPO_FIXES:          # заглавная буква сохраняется: «Осцилограф» → «Осциллограф»
+        text = rx.sub(lambda m: (right[0].upper() if m.group(0)[0].isupper() else right[0]) + right[1:], text)
+    text = HZ_RE.sub(lambda m: m.group(1) + " " + {"к": "к", "м": "М", "г": "Г"}.get(m.group(2).lower(), "") + "Гц",
+                     text)
+    return LATIN_RE.sub(lambda m: f"{m.group(1)} {LATIN_UNITS[m.group(2)]}" if m.group(1)
+                        else f"{m.group(3)} {LATIN_SHORT[m.group(4)]}", text)
 
 
 @dataclass
@@ -380,6 +403,11 @@ def _requirements(question: str, kind: str | None) -> list[Req]:
     """Требования клиента из вопроса. Обозначения моделей вырезаются: «4115/1В» — не «1 В»."""
     question = MODEL_TOKEN_RE.sub(" ", question)
     reqs = []
+    # «от 200 до 480 °C» — у нижней границы единица не повторена: у диапазонных параметров это два требования
+    for m in re.finditer(rf"\bот\s+({NUM})\s+до\s+{NUM}\s*(°\s?[CС]|градус\w*)", question, re.I):
+        param = _unit_param("°C", kind, question)
+        if param in RANGE_PARAMS:
+            reqs.append(Req(param, _parse_number(m.group(1)), f"{m.group(1)} °C", "lo"))
     for m in REQ_RE.finditer(question):
         raw_unit = m.group(2)
         unit = "°C" if raw_unit.startswith(("°", "градус")) else raw_unit
@@ -389,8 +417,12 @@ def _requirements(question: str, kind: str | None) -> list[Req]:
         value = _parse_number(m.group(1)) * UNITS[unit][1]
         mode = _mode(question[max(0, m.start() - 25):m.start()].lower(), param)
         reqs.append(Req(param, value, f"{m.group(1)} {raw_unit}", mode))
+    channels = []
     for m in CHANNELS_RE.finditer(question):
-        n = int(m.group(1)) if m.group(1) else WORD_NUM[m.group(2).lower()]
+        n = int(m.group(1) or m.group(3)) if (m.group(1) or m.group(3)) else WORD_NUM[m.group(2).lower()]
+        channels.append(n)
+    if channels:                                  # «4 канала … каналов не менее 4» — одно требование
+        n = max(channels)
         reqs.append(Req("Число каналов", n, f"{n} каналов", "min"))
     return reqs
 
@@ -400,6 +432,7 @@ def understand(question: str, values: list[Value] | None = None) -> Query | None
     («как заменить батарею в MAS830L» — вопрос к документам, а не к справочнику)."""
     if values is None:
         values = load()[0]
+    question = normalize(question)
     if not values or PRICE_RE.search(question):
         return None
     models = _find_models(question, values)

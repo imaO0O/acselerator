@@ -8,17 +8,21 @@
   4) предлагает минимально достаточную модель — с наименьшим запасом по требованиям (окончательный выбор —
      за менеджером), показывает альтернативы;
   5) составляет вопросы клиенту по позициям без требований и передаёт эксперту противоречия источников.
-Цены и сроки агент не придумывает — их вписывает менеджер. Утверждает ТКП сотрудник, автоотправки нет.
+Цены и сроки агент не придумывает: подставляет их из прайса (kbagent/prajs.py) с пометкой «по прайсу от …» и
+считает сумму «цена × количество»; чего нет в прайсе, вписывает менеджер. Утверждает ТКП сотрудник, автоотправки нет.
 """
 import io
 import math
 import re
 from dataclasses import asdict, dataclass, field
 
+from . import prajs
 from . import spravochnik as spr
 
 TKP_WORDS_RE = re.compile(r"\bТ?КП\b|коммерческ\w*\s+предложени\w*|запрос\w*\s+клиент\w*|письм\w*\s+клиент\w*|"
-                          r"заявк\w*\s+клиент\w*|подготов\w*\s+предложени\w*|подбер\w*\s+(?:и\s+)?предлож\w*", re.I)
+                          r"заявк\w*\s+клиент\w*|подготов\w*\s+предложени\w*|подбер\w*\s+(?:и\s+)?предлож\w*|"
+                          r"(?:просим|прошу|просьба)\s+(?:вас\s+)?(?:предложить|подобрать|выставить|направить\s+предложени)",
+                          re.I)
 # продукция, которой нет в справочнике: позиция есть, но подбирать не по чему — к техническому отделу
 OTHER_RE = re.compile(r"источник\w*\s+питани\w*|блок\w*\s+питани\w*|генератор\w*|частотомер\w*|анализатор\w*|"
                       r"токов\w*\s+клещ\w*|клещ\w*|мегаомметр\w*|пирометр\w*|термометр\w*|тепловизор\w*|"
@@ -29,6 +33,8 @@ WORD_NUM = {"один": 1, "одна": 1, "одну": 1, "два": 2, "две": 
             "семь": 7, "восемь": 8, "девять": 9, "десять": 10}
 QTY_BEFORE_RE = re.compile(rf"(?:^|\s)(\d{{1,3}}|{'|'.join(WORD_NUM)})\s+(?:[а-яё]+\s+)?$", re.I)
 QTY_RE = re.compile(r"(\d{1,3})\s*(?:шт\b\.?|штук\w*|ед\.|единиц\w*|комплект\w*)", re.I)
+# строка таблицы из Word или Excel: «Мультиметр | переменное напряжение до 750 В | 5» — количество в последней ячейке
+TABLE_QTY_RE = re.compile(r"[|\t]\s*(\d{1,3})\s*(?:шт\.?)?\s*\|?\s*$")
 PRICE_WORDS_RE = re.compile(r"\b(?:с\s+)?(?:цен\w*|стоимост\w*|прайс\w*)\b", re.I)
 
 
@@ -57,6 +63,11 @@ class Position:
     checks: list = field(default_factory=list)
     note: str = ""
     ask_client: str = ""
+    price: float | None = None     # ₽ за единицу — из прайса, только у предложенной или названной модели
+    lead: str = ""                 # срок поставки из прайса
+    price_since: str = ""          # дата прайса, ГГГГ-ММ-ДД
+    price_note: str = ""           # «ДЕМО», «прайс старше 90 дней — проверьте цену»
+    alt_prices: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -65,6 +76,7 @@ class Tkp:
     sources: list
     expert_ids: list = field(default_factory=list)
     pending: list = field(default_factory=list)     # противоречия для эксперта — заводятся notify_experts
+    price_list: bool = False                        # прайс загружен: «цены нет» — значит, нет в прайсе
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -119,8 +131,11 @@ def _segments(text: str, anchors: list) -> list[tuple[str, str, int]]:
         qty = 1
         before = QTY_BEFORE_RE.search(text[starts[i]:start])
         after = QTY_RE.search(seg)
+        cell = TABLE_QTY_RE.search(seg.split("\n")[0].rstrip())
         if after:
             qty = int(after.group(1))
+        elif cell:
+            qty = int(cell.group(1))
         elif before:
             word = before.group(1).lower()
             qty = int(word) if word.isdigit() else WORD_NUM[word]
@@ -149,6 +164,7 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
     values, rep = spr.load()
     catalog = load_catalog(spr.settings.raw_dir)
     values = [v for v in values if access_of(catalog.get(v.doc, {})) in allowed]
+    text = spr.normalize(text)                  # опечатки и единицы латиницей — к написанию справочника
     anchors = _anchors(text, values)
     if not anchors:
         return None
@@ -183,7 +199,7 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         q = spr.understand(PRICE_WORDS_RE.sub(" ", seg), values)
         named = spr._find_models(seg, values)
         reqs = q.reqs if q else []
-        pos.reqs = [f"{r.param.lower()} {spr.REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in reqs]
+        pos.reqs = _req_texts(reqs)
         candidates = named or sorted({v.model for v in values if v.kind == kind})
         pos.total = len(candidates)
         if not reqs and not named:
@@ -242,7 +258,51 @@ def parse(text: str, allowed: set[str]) -> Tkp | None:
         missed = "; ".join(f"{c.param.lower()} {c.value} при требовании {c.need}" for c in pos.checks if c.ok is False)
         pos.note = f"ни одна модель в справочнике не подходит; ближайшая — {closest}: {missed}"
         pos.ask_client = f"{kind}: в нашем ассортименте нет модели под все требования ({missed}) — допустимо ли?"
-    return Tkp(positions, sources, [], pending)
+    for pos in positions:
+        pos.checks = _merge_checks(pos.checks)
+    prices, _ = prajs.load()
+    for pos in positions:
+        if pos.status not in ("offer", "named"):
+            continue
+        pos.alt_prices = {m: prices[m].price for m in pos.alternatives if m in prices}
+        if pos.model in prices:
+            pr = prices[pos.model]
+            pos.price, pos.lead, pos.price_since = pr.price, pr.lead, pr.since
+            pos.price_note = "; ".join(x for x in ("ДЕМО" if pr.demo else "",
+                                                   f"прайс старше {prajs.STALE_DAYS} дней — проверьте цену"
+                                                   if pr.stale else "") if x)
+    return Tkp(positions, sources, [], pending, price_list=bool(prices))
+
+
+def _req_texts(reqs: list) -> list[str]:
+    """Требования для показа; нижняя и верхняя граница одного параметра — одной строкой: «температура жала
+    паяльника от 200 до 480 °C»."""
+    out, merged = [], set()
+    for r in reqs:
+        if r.param in merged:
+            continue
+        lo = next((x for x in reqs if x.param == r.param and x.mode == "lo"), None)
+        hi = next((x for x in reqs if x.param == r.param and x.mode == "hi"), None)
+        if lo and hi:
+            merged.add(r.param)
+            out.append(f"{r.param.lower()} от {lo.shown.rsplit(' ', 1)[0]} до {hi.shown}")
+            continue
+        out.append(f"{r.param.lower()} {spr.REQ_WORDS[r.mode]} {r.shown}".replace("  ", " "))
+    return out
+
+
+def _merge_checks(checks: list) -> list:
+    """Две проверки одного значения («от 200 °C» и «до 480 °C») — одна: «нужно от 200 до 480 °C»; не подходит,
+    если не выполнена любая из границ."""
+    out: list[Check] = []
+    for c in checks:
+        prev = next((x for x in out if (x.param, x.value, x.ref) == (c.param, c.value, c.ref)), None)
+        if prev is None or not (prev.need.startswith("от ") and c.need.startswith("до ")):
+            out.append(c)
+            continue
+        prev.need = f"{prev.need.rsplit(' ', 1)[0]} {c.need}"
+        prev.ok = False if False in (prev.ok, c.ok) else None if None in (prev.ok, c.ok) else True
+    return out
 
 
 def _first(by, m, param, contradicted, decided):
@@ -344,6 +404,24 @@ def _check_text(c: Check, mark: bool = True) -> str:
     return f"{c.param.lower()} — {c.value or 'нет данных'}{ref}{note}{need}{sign}"
 
 
+def _price_line(p: dict, price_list: bool) -> str:
+    """«Цена по прайсу от 01.10.2026: 41 500 ₽ × 2 шт. = 83 000 ₽; срок поставки — в наличии.»"""
+    if not p.get("price"):
+        return "В прайсе цены нет — впишет менеджер." if price_list else ""
+    demo = " (ДЕМО)" if "ДЕМО" in p.get("price_note", "") else ""
+    line = (f"Цена по прайсу от {prajs.shown_date(p['price_since'])}{demo}: {prajs.money(p['price'])} × {p['qty']} шт. "
+            f"= {prajs.money(p['price'] * p['qty'])}")
+    if p.get("lead"):
+        line += f"; срок поставки — {p['lead']}"
+    if "старше" in p.get("price_note", ""):
+        line += f"; прайс старше {prajs.STALE_DAYS} дней — проверьте цену"
+    return line + "."
+
+
+def _priced(positions: list[dict]) -> list[dict]:
+    return [p for p in positions if p["status"] in ("offer", "named") and p.get("price")]
+
+
 def has_offer(t: Tkp) -> bool:
     """Есть хотя бы одна позиция из справочника — иначе это честный отказ, а не ТКП."""
     return any(p.status != "not_in_catalog" for p in t.positions)
@@ -371,16 +449,25 @@ def answer_text(t: Tkp) -> str:
         lines.append(head)
         if p.status == "offer":
             lines.append(f"- Предлагаем **{p.model}**: " + "; ".join(_check_text(c) for c in p.checks) + ".")
-            more = f"Также подходят: {', '.join(p.alternatives)}" if p.alternatives else "Других подходящих нет"
+            alts = [m + (f" — {prajs.money(p.alt_prices[m])}" if m in p.alt_prices else "") for m in p.alternatives]
+            more = f"Также подходят: {', '.join(alts)}" if alts else "Других подходящих нет"
             lines.append(f"- {more} (всего {p.fit_count} из {p.total}).")
         elif p.status == "named":
             lines.append(f"- **{p.model}**: " + "; ".join(_check_text(c, mark=False) for c in p.checks) + ".")
+        if p.status in ("offer", "named") and (price := _price_line(asdict(p), t.price_list)):
+            lines.append(f"- {price}")
         elif p.status in ("no_fit", "expert"):
             lines.append(f"- {p.note[:1].upper() + p.note[1:]}.")
             if p.checks:
                 lines.append(f"- {p.model}: " + "; ".join(_check_text(c) for c in p.checks) + ".")
         else:
             lines.append(f"- {p.note[:1].upper() + p.note[1:]}.")
+    priced = _priced([asdict(p) for p in t.positions])
+    if priced:
+        offered = sum(1 for p in t.positions if p.status in ("offer", "named"))
+        total = sum(p["price"] * p["qty"] for p in priced)
+        lines += ["", f"**Итого по прайсу:** {prajs.money(total)} — позиций с ценой {len(priced)} из {offered}; "
+                      "цены и сроки проверяет менеджер."]
     asks = [p.ask_client for p in t.positions if p.ask_client]
     if asks:
         lines += ["", "**Уточнить у клиента:**"] + [f"- {a}" for a in asks]
@@ -413,7 +500,9 @@ def draft_text(t: dict, signer: str = "") -> str:
     lines = ["Добрый день!", "", "Благодарим за запрос. По вашим требованиям предлагаем:"]
     for p in t["positions"]:
         if p["status"] in ("offer", "named"):
-            lines.append(f"{p['n']}. {p['kind']} {p['model']} — {p['qty']} шт. Цена: [заполняет менеджер].")
+            price = (f"Цена: {prajs.money(p['price'])} за шт., сумма {prajs.money(p['price'] * p['qty'])}."
+                     if p.get("price") else "Цена: [заполняет менеджер].")
+            lines.append(f"{p['n']}. {p['kind']} {p['model']} — {p['qty']} шт. {price}")
         elif p["status"] == "no_fit":
             lines.append(f"{p['n']}. {p['kind']} — подходящей модели под все требования нет, предлагаем обсудить "
                          f"варианты (ближайшая — {p['model']}).")
@@ -424,9 +513,22 @@ def draft_text(t: dict, signer: str = "") -> str:
     asks = [p["ask_client"] for p in t["positions"] if p.get("ask_client")]
     if asks:
         lines += ["", "Просим уточнить:"] + [f"- {a}" for a in asks]
+    priced = _priced(t["positions"])
+    offered = [p for p in t["positions"] if p["status"] in ("offer", "named")]
     lines += ["", "Соответствие характеристик вашим требованиям — в таблице ТКП; значения приведены по руководствам "
-              "по эксплуатации (источники — под таблицей).", "Срок поставки: [заполняет менеджер].", "",
-              "С уважением,", signer or "[ФИО, должность]"]
+              "по эксплуатации (источники — под таблицей)."]
+    if priced:
+        since = ", ".join(dict.fromkeys(prajs.shown_date(p["price_since"]) for p in priced))
+        lines.append(f"Цены указаны по прайс-листу от {since}.")
+    leads = {p["n"]: p.get("lead") for p in offered}
+    if offered and all(leads.values()) and len(set(leads.values())) == 1:
+        lines.append(f"Срок поставки: {next(iter(leads.values()))}.")
+    elif any(leads.values()):
+        lines.append("Срок поставки: " + "; ".join(f"поз. {n} — {lead or '[заполняет менеджер]'}"
+                                                   for n, lead in leads.items()) + ".")
+    else:
+        lines.append("Срок поставки: [заполняет менеджер].")
+    lines += ["", "С уважением,", signer or "[ФИО, должность]"]
     return "\n".join(lines)
 
 
@@ -480,7 +582,15 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
                   "no_reqs": "требования уточняются у клиента", "not_in_catalog": "уточняется возможность поставки"}
         cells[0].text, cells[1].text, cells[2].text = str(p["n"]), name, str(p["qty"])
         cells[3].text = checks or status.get(p["status"], "")
-        cells[4].text = cells[5].text = ""
+        has_price = p["status"] in ("offer", "named") and p.get("price")
+        cells[4].text = prajs.money(p["price"]) if has_price else ""
+        cells[5].text = prajs.money(p["price"] * p["qty"]) if has_price else ""
+    priced = _priced(t["positions"])
+    if priced:
+        cells = table.add_row().cells
+        cells[1].text = "Итого по прайсу"
+        cells[5].text = prajs.money(sum(p["price"] * p["qty"] for p in priced))
+        cells[1].paragraphs[0].runs[0].bold = cells[5].paragraphs[0].runs[0].bold = True
     for row in table.rows:
         for cell, width in zip(row.cells, (Cm(1), Cm(4.2), Cm(1.8), Cm(7), Cm(2.4), Cm(2.4))):
             cell.width = width
@@ -495,8 +605,18 @@ def tkp_docx(text: str, t: dict, approved_by: str, approved_at: str, app_name: s
     paragraphs(lines[cut:])
     doc.add_paragraph()
     note = doc.add_paragraph()
+    offered = [p for p in t["positions"] if p["status"] in ("offer", "named")]
+    if priced:
+        since = ", ".join(dict.fromkeys(prajs.shown_date(p["price_since"]) for p in priced))
+        demo = " (ДЕМО — цены вымышленные)" if any("ДЕМО" in p.get("price_note", "") for p in priced) else ""
+        stale = (f"; прайс старше {prajs.STALE_DAYS} дней — цены проверить"
+                 if any("старше" in p.get("price_note", "") for p in priced) else "")
+        missing = "; чего нет в прайсе, вписывает менеджер" if len(priced) < len(offered) else ""
+        prices = f"Цены и сроки — по прайсу от {since}{demo}{stale}{missing}, их проверяет менеджер."
+    else:
+        prices = "Цены и сроки вписывает менеджер."
     run = note.add_run(f"Черновик подготовлен: {app_name}, характеристики и соответствие требованиям — по справочнику "
-                       f"параметров со ссылками на руководства. Цены и сроки вписывает менеджер. "
+                       f"параметров со ссылками на руководства. {prices} "
                        f"Утвердил: {approved_by}, {approved_at}.")
     run.italic, run.font.color.rgb, run.font.size = True, RGBColor(0x5C, 0x54, 0x70), Pt(10)
     buf = io.BytesIO()

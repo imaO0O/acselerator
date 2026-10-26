@@ -17,7 +17,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import effect, experts, spravochnik
+from kbagent import effect, experts, prajs, spravochnik
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -302,6 +302,64 @@ def reference() -> None:
         st.dataframe(df, hide_index=True, use_container_width=True, height=360)
         st.download_button("Скачать справочник (CSV)", spravochnik.PATH.read_bytes(), file_name="spravochnik.csv",
                            icon=":material/download:", key="spr-dl")
+    price_list()
+
+
+def price_list() -> None:
+    """Прайс для ТКП: цена и срок поставки по моделям — с проверкой при загрузке, как у справочника."""
+    st.markdown("#### Прайс для ТКП")
+    prices, rep = prajs.load()
+    values, _ = spravochnik.load()
+    without = sorted({v.model for v in values} - set(prices))
+    st.caption("Цена за единицу и срок поставки подставляются в разбор письма клиента и в ТКП с пометкой «по прайсу "
+               "от …»; сумму считает программа, утверждает менеджер. Файл — CSV или XLSX с колонками: "
+               + ", ".join(prajs.COLUMNS) + f". Прайс старше {prajs.STALE_DAYS} дней отмечается в ТКП.")
+    c = st.columns(4)
+    c[0].metric("Цен", len(prices))
+    c[1].metric("Моделей без цены", len(without), help=", ".join(without) or None)
+    c[2].metric("Строк с ошибками", len(rep.errors) if prices else 0)
+    c[3].metric("Разные цены одной модели", len(rep.conflicts))
+    if not prices:
+        st.info("Прайс не загружен — цены и сроки в ТКП вписывает менеджер.")
+    if rep.errors and prices:
+        st.warning("Строки, не прошедшие проверку, не загружены:")
+        st.dataframe(pd.DataFrame(rep.errors).rename(columns={"line": "Строка файла", "error": "Причина"}),
+                     hide_index=True, use_container_width=True)
+    if rep.conflicts:
+        st.warning("У этих моделей в прайсе разные цены — цена в ТКП не подставляется, пока прайс не исправят: "
+                   + "; ".join(f"{x['model']}: {', '.join(x['prices'])}" for x in rep.conflicts))
+    if rep.unknown:
+        st.info("Этих моделей нет в справочнике параметров — в ТКП они не попадут: " + ", ".join(rep.unknown))
+    with st.container(border=True):
+        st.markdown("**Загрузить новый прайс**")
+        st.caption("Файл проверяется до замены: пропуски, цены, даты, разные цены одной модели. Без колонки "
+                   "«Действует с» датой прайса считается день загрузки. Если ни одна строка не прошла проверку, "
+                   "действующий прайс остаётся.")
+        st.session_state.setdefault("prajs_key", 0)
+        f = st.file_uploader("Прайс", type=["csv", "xlsx"], key=f"prajs-{st.session_state.prajs_key}",
+                             label_visibility="collapsed")
+        if f is not None:
+            try:
+                new = prajs.replace_file(f.name, f.getvalue())
+                log_action("prajs", ctx()["login"], f.name,
+                           f"цен: {new.prices}; ошибок: {len(new.errors)}; разных цен: {len(new.conflicts)}")
+                conflicts = (f" Разные цены — модели не загружены: {', '.join(x['model'] for x in new.conflicts)}."
+                             if new.conflicts else "")
+                st.session_state.prajs_note = ("success", f"Загружено цен: {new.prices}. Ошибок: {len(new.errors)}."
+                                                          + conflicts)
+            except ValueError as e:
+                st.session_state.prajs_note = ("error", str(e))
+            st.session_state.prajs_key += 1
+            st.rerun()
+        if note := st.session_state.pop("prajs_note", None):
+            getattr(st, note[0])(note[1])
+    if prices:
+        df = pd.DataFrame([{"Модель": p.model, "Цена": prajs.money(p.price), "Срок поставки": p.lead,
+                            "Действует с": prajs.shown_date(p.since) + (" — проверить" if p.stale else ""),
+                            "Примечание": p.note} for p in prices.values()])
+        st.dataframe(df, hide_index=True, use_container_width=True, height=300)
+        st.download_button("Скачать прайс (CSV)", prajs.PATH.read_bytes(), file_name="prajs.csv",
+                           icon=":material/download:", key="prajs-dl")
 
 
 def expert_queue() -> None:

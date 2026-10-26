@@ -30,4 +30,6 @@ data/model_api_key.txt
 # справочник параметров: отчёт о загрузке и предыдущая версия файла — производные
 data/spravochnik/import.json
 data/spravochnik/pribory.prev.csv
+# прайс: предыдущая версия файла — производная
+data/spravochnik/prajs.prev.csv
 data/spravochnik/upload.*

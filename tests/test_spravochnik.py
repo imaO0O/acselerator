@@ -105,8 +105,9 @@ def test_tkp_word_document_has_positions_table(tmp_path, monkeypatch):
 
     from docx import Document
 
-    from kbagent import experts, tkp
+    from kbagent import experts, prajs, tkp
     monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    monkeypatch.setattr(prajs, "PATH", tmp_path / "net-prajsa.csv")      # без прайса цены вписывает менеджер
     t = tkp.parse("ТКП: 2 осциллографа от 150 МГц на 4 канала, мультиметр на ток до 15 А", {"all"}).to_dict()
     text = tkp.draft_text(t, "Сотрудник")
     assert "АКИП-4143/1 — 2 шт." in text and "[заполняет менеджер]" in text
@@ -166,3 +167,28 @@ def test_letter_only_with_unknown_products_is_an_honest_refusal(tmp_path, monkey
     t = tkp.parse(text, {"all"})
     assert tkp.is_request(text, t) and not tkp.has_offer(t)
     assert "нет в справочнике" in tkp.answer_text(t)
+
+
+def test_letters_with_typos_latin_units_and_table_are_parsed(tmp_path, monkeypatch):
+    """Ошибки разбора, найденные на письмах K09–K20 (Д1)."""
+    from kbagent import experts, tkp
+    monkeypatch.setattr(experts, "PATH", tmp_path / "experts.json")
+    # опечатки и «МГЦ»; латинские единицы — а обозначения моделей не трогаются
+    assert S.normalize("осцилограф на 100 МГЦ, мультиметер") == "осциллограф на 100 МГц, мультиметр"
+    assert S.normalize("Осцилограф 350MHz, ток до 10 A, 60 W") == "Осциллограф 350 МГц, ток до 10 А, 60 Вт"
+    assert S.normalize("DT9205A, MAS830L, Юпитер 830B, 10A") == "DT9205A, MAS830L, Юпитер 830B, 10A"
+    # «каналов ≥ 4» — число после слова; с «4 канала» не задваивается
+    reqs = S._requirements("осциллограф, полоса ≥ 100 МГц, каналов ≥ 4", "Осциллограф")
+    assert [(r.param, r.value) for r in reqs if r.param == "Число каналов"] == [("Число каналов", 4)]
+    assert len([r for r in S._requirements("4 канала, каналов не менее 4", "Осциллограф")]) == 1
+    # «от 200 до 480 °C» — одно требование «от … до» и одна проверка; граница не выполнена — не подходит
+    t = tkp.parse("Просим предложить паяльную станцию с регулировкой температуры от 200 до 480 °C — 5 шт.", {"all"})
+    assert tkp.is_request("Просим предложить паяльную станцию", t)
+    pos = t.positions[0]
+    assert pos.reqs == ["температура жала паяльника от 200 до 480 °C"] and len(pos.checks) == 1 and pos.qty == 5
+    narrow = tkp.parse("ТКП: паяльная станция от 20 до 480 °C", {"all"}).positions[0]
+    assert narrow.status == "no_fit" and narrow.checks[0].need == "от 20 до 480 °C"
+    # количество из последней ячейки таблицы
+    table = ("Просим КП:\nНаименование | Требования | Кол-во\nОсциллограф | полоса от 200 МГц, 4 канала | 1\n"
+             "Мультиметр | переменное напряжение до 750 В | 5")
+    assert [(p.kind, p.qty) for p in tkp.parse(table, {"all"}).positions] == [("Осциллограф", 1), ("Мультиметр", 5)]
