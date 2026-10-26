@@ -32,6 +32,9 @@ class Settings:
     db_schema: Path = ROOT / "data" / "demo_db" / "schema.yaml"   # слой понятных названий базы
     users_path: Path = ROOT / "data" / "users.yaml"                # учётные записи (хэши паролей)
     tessdata_dir: Path = ROOT / "tools" / "tessdata"               # языки распознавания сканов
+    # папка документов отдела (сетевая или локальная): новые и изменённые файлы подключаются сами — folder_sync
+    docs_folder: str = _env("KB_DOCS_FOLDER", "")
+    docs_folder_access: str = _env("KB_DOCS_FOLDER_ACCESS", "all")   # доступ документов без записи в реестре
     log_dir: Path = ROOT / "logs"
     # вход по логину и паролю; KB_AUTH=0 — выбор роли из списка (для отладки)
     auth_required: bool = _env("KB_AUTH", True)

@@ -2,6 +2,7 @@
 import json
 import re
 import time
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -17,7 +18,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import effect, experts, prajs, spravochnik
+from kbagent import effect, experts, folder_sync, prajs, spravochnik
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -155,8 +156,42 @@ def feedback() -> None:
     st.download_button("Выгрузить в CSV", _csv(df), file_name="otsenki.csv", icon=":material/download:")
 
 
+def docs_folder(agent) -> None:
+    """Папка документов отдела: новые и изменённые файлы подключаются сами, удалённые — убираются."""
+    with st.container(border=True):
+        st.markdown("**Папка документов отдела**")
+        folder = settings.docs_folder
+        if not folder:
+            st.caption("Не задана. Укажите сетевую или локальную папку в переменной KB_DOCS_FOLDER — новые и "
+                       "изменённые файлы будут подключаться сами (scripts/sync_folder.py --watch 600), удалённые — "
+                       "убираться из базы знаний.")
+            return
+        last = folder_sync.last_report()
+        st.caption(f"Папка: {folder}. Реестр — catalog.yaml в папке или загруженный шаблон партнёра; без записи "
+                   "в реестре название берётся из документа, доступ — " + ACCESS_LABELS.get(
+                       settings.docs_folder_access, settings.docs_folder_access).lower() + ".")
+        if last:
+            st.caption(f"Последняя проверка: {display(last['started'])[:16]} — добавлено {last['added']}, обновлено "
+                       f"{last['updated']}, удалено {last['removed']}, без изменений {last['unchanged']}.")
+            if last.get("warning"):
+                st.warning(last["warning"])
+            for name, error in last.get("errors", []):
+                st.error(f"{name}: {error}")
+        if st.button("Проверить папку сейчас", icon=":material/sync:", key="folder-sync"):
+            with st.spinner("Сверяю папку с базой знаний…"):
+                rep = folder_sync.sync(agent.index, Path(folder), user=ctx()["login"])
+            st.session_state.folder_note = (
+                f"Добавлено {len(rep.added)}, обновлено {len(rep.updated)}, удалено {len(rep.removed)}, без "
+                f"изменений {rep.unchanged}" + (f", ошибок {len(rep.errors)}" if rep.errors else "") + ".")
+            st.rerun()
+        if note := st.session_state.pop("folder_note", None):
+            st.success(note)
+
+
 def docs() -> None:
     agent = get_agent()
+    agent.index.reload_if_changed(settings.index_dir)      # документы могла добавить обработка папки
+    docs_folder(agent)
     with st.container(border=True):
         st.markdown("**Добавить документ**")
         st.caption("PDF и Word; сканы и фото страниц — текст распознаётся" + ("" if ocr_available() else

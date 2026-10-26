@@ -755,6 +755,8 @@ class Agent:
         step = on_step or (lambda _: None)
         if settings.db_path == demo_db.DB:
             demo_db.ensure_current()      # даты демо-базы — от сегодняшнего дня
+        # индекс мог изменить другой процесс — обработка папки документов (scripts/sync_folder.py)
+        self.index.reload_if_changed(settings.index_dir)
         self._sync_registry()
         allowed = settings.roles.get(role, {"all"})
 
