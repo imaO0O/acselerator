@@ -555,6 +555,7 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
     rows, lines, experts = [], [], []
 
     confirmed = []
+    demand = None                     # подбор или проверка по требованиям — в аналитику спроса (kbagent/demand.py)
 
     def cell(model: str, param: str) -> tuple[str, list[Value]]:
         items, state, d = pick(model, param, by, contradicted, decided)
@@ -603,6 +604,10 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
         unfit = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "unfit"]
         unknown = [(m, verdicts(m)) if m in shown_models else (m, []) for m in models if state[m] == "unknown"]
         need = "; ".join(f"{r.param.lower()} {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in q.reqs)
+        demand = {"kind": q.kind or next((v.kind for v in values if v.model in models), ""),
+                  "named": list(q.models or []), "fit": [m for m, _ in fit], "unfit": [m for m, _ in unfit],
+                  "unknown": [m for m, _ in unknown],
+                  "reqs": [f"{r.param.lower()} {REQ_WORDS[r.mode]} {r.shown}".replace("  ", " ") for r in q.reqs]}
         if q.models:
             for m, verdicts in fit + unfit + unknown:
                 state = ("подходит" if (m, verdicts) in fit else "не подходит" if (m, verdicts) in unfit
@@ -664,4 +669,4 @@ def answer(q: Query, allowed: set[str], question: str = "", user: str | None = N
     text = head + "\n" + "\n".join(lines) + f"\n\n{note} Это черновик — проверьте его перед отправкой клиенту."
     return SprAnswer(status, text, sources, ["model", "param", "value"], rows, ["Модель", "Параметр", "Значение"],
                      stats={"spravochnik": True, "models": len(models), "contradictions": len(experts),
-                            "expert_ids": expert_ids})
+                            "expert_ids": expert_ids, "demand": demand})

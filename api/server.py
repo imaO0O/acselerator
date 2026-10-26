@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from kbagent import llm, tkp  # noqa: E402
+from kbagent import demand, llm, tkp  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
@@ -208,6 +208,8 @@ def make_tkp(req: TkpRequest, who: dict = Depends(client)) -> TkpResponse:
         docx = base64.b64encode(tkp.tkp_docx(draft, d, "не утверждён — черновик через API",
                                              time.strftime("%d.%m.%Y %H:%M"), "AI-агент")).decode()
     log_action("api_tkp", user, letter[:120], f"позиций: {len(positions)}; с ценой: {len(priced)}")
+    if not req.choices:                       # повторный разбор с выбором приборов — тот же запрос клиента
+        demand.record("письмо клиента (API)", demand.from_tkp(d), who["role"], user)
     return TkpResponse(
         status="answer" if tkp.has_offer(t) else "no_offer", positions=positions, total=total,
         vat=tkp._vat(total)[0] if total and settings.vat_rate else None,

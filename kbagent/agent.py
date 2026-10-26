@@ -8,7 +8,7 @@ from typing import Callable
 
 import yaml
 
-from . import demo_db, llm, raschety, spravochnik, tkp
+from . import demand, demo_db, llm, raschety, spravochnik, tkp
 from .answer import answer_from_documents, source_label
 from .cards import build_cards, card_chunk, card_text
 from .config import settings
@@ -750,7 +750,8 @@ class Agent:
 
     def ask(self, question: str, role: str = "Администратор", route: str = "auto",
             history: list[dict] | None = None, on_step: Callable[[str], None] | None = None,
-            user: str | None = None, log: bool = True) -> AgentResult:
+            user: str | None = None, log: bool = True, count_demand: bool = True) -> AgentResult:
+        """count_demand=False — новая редакция уже учтённого запроса клиента: в аналитику спроса повторно не идёт."""
         t0 = time.time()
         step = on_step or (lambda _: None)
         if settings.db_path == demo_db.DB:
@@ -781,6 +782,8 @@ class Agent:
                 result.seconds = round(time.time() - t0, 2)
                 if log:
                     self._log(result, user)
+                    if count_demand:
+                        demand.record("письмо клиента", demand.from_tkp(result.stats["tkp"]), role, user)
                 return result
         talk = self.small_talk(base, role, allowed)
         if talk is not None:
@@ -815,6 +818,8 @@ class Agent:
                     result.seconds = round(time.time() - t0, 2)
                     if log:
                         self._log(result, user)
+                        if count_demand:
+                            demand.record("подбор", demand.from_selection(s.stats.get("demand")), role, user)
                     return result
         # «партия из 250 шт.: сколько осмотреть?» — расчёт по согласованным правилам программой
         if route in ("auto", "documents"):

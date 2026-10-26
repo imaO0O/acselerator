@@ -18,7 +18,7 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import backup, effect, experts, folder_sync, prajs, spravochnik
+from kbagent import backup, demand, effect, experts, folder_sync, prajs, spravochnik, tkp_registry
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -594,31 +594,82 @@ def system() -> None:
                 st.markdown(path.read_text(encoding="utf-8"))
 
 
+PERIODS = {"30 дней": 30, "90 дней": 90, "Всё время": None}
+
+
+def demand_tab() -> None:
+    """Спрос: что запрашивают клиенты, какие запросы не закрыты и почему, причины проигрышей ТКП."""
+    import datetime as dt
+    st.caption("Из разборов писем клиентов и подборов по справочнику — без текста писем и данных клиентов: вид "
+               "продукции, требования, итог по позиции. Проверочные прогоны не учитываются. Причину проигрыша "
+               "менеджер выбирает при смене статуса ТКП на «проигран» в «Реестре ТКП».")
+    period = st.segmented_control("Период", list(PERIODS), default="90 дней", key="demand-period",
+                                  label_visibility="collapsed") or "90 дней"
+    days = PERIODS[period]
+    since = dt.date.today() - dt.timedelta(days=days) if days else None
+    s = demand.summary(demand.load(since), tkp_registry.load(), since=since)
+    if not s["positions"] and not (s["won"] or s["lost"]):
+        st.info("За этот период запросов нет. Спрос копится сам: письма клиентов («Черновик ТКП», входящие из почты, "
+                "API) и подборы по справочнику («осциллограф от 150 МГц и 4 канала»).")
+        return
+    c = st.columns(4)
+    c[0].metric("Запросов", s["requests"], help="Писем клиентов и подборов по справочнику")
+    c[1].metric("Позиций", s["positions"])
+    c[2].metric("Закрыто", f"{s['closed_share']} %" if s["closed_share"] is not None else "—",
+                help="Позиции, по которым предложена модель из справочника")
+    decided = s["won"] + s["lost"]
+    c[3].metric("ТКП выиграно", f"{s['won']} из {decided}" if decided else "—",
+                help="Из ТКП со статусом «выигран» или «проигран»")
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Что запрашивают**")
+        if s["kinds"]:
+            st.dataframe(pd.DataFrame([{"Вид продукции": k, "Запросов": n, "Штук": qty,
+                                        "Закрыто": round(100 * closed / n)} for k, n, qty, closed in s["kinds"]]),
+                         hide_index=True, width="stretch", column_config={
+                             "Закрыто": st.column_config.ProgressColumn("Закрыто", format="%d %%", min_value=0,
+                                                                        max_value=100)})
+    with right:
+        st.markdown("**Что предлагаем чаще всего**")
+        if s["offered"]:
+            st.bar_chart(pd.DataFrame(s["offered"], columns=["Модель", "Штук"]), x="Модель", y="Штук",
+                         horizontal=True, sort="-Штук", color="#6B4FA0", height=min(60 + 34 * len(s["offered"]), 380))
+        else:
+            st.caption("Пока ни одна модель не предложена.")
+        if s["asked"]:
+            st.caption("Спрашивали по названию: " + ", ".join(f"{m} ({n})" for m, n in s["asked"]))
+    st.markdown("**Не закрыто — что дописать в справочник или добавить в ассортимент**")
+    if s["unmet"]:
+        st.dataframe(pd.DataFrame([{"Вид продукции": k, "Почему не закрыто": why, "Раз": n}
+                                   for k, why, n in s["unmet"]]), hide_index=True, width="stretch")
+    else:
+        st.caption("Все позиции закрыты моделями из справочника.")
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Частые требования клиентов**")
+        if s["reqs"]:
+            st.dataframe(pd.DataFrame(s["reqs"], columns=["Требование", "Раз"]), hide_index=True, width="stretch")
+    with right:
+        st.markdown("**Проигрыши: причины**")
+        if s["lost_reasons"]:
+            st.dataframe(pd.DataFrame(s["lost_reasons"], columns=["Причина", "ТКП"]), hide_index=True,
+                         width="stretch")
+            if s["by_model"]:
+                st.dataframe(pd.DataFrame(s["by_model"], columns=["Модель", "Выиграно", "Проиграно"]),
+                             hide_index=True, width="stretch")
+        else:
+            st.caption("Проигранных ТКП нет.")
+
+
 def admin_page() -> None:
     inject_css()
     if not ctx()["is_admin"]:
         st.error("Раздел доступен только администратору.")
         return
     st.markdown("### Администрирование")
-    tabs = st.tabs(["Эффект", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы", "Справочник",
-                    "Вопросы эксперту", "Качество", "Безопасность", "Система"])
-    with tabs[0]:
-        effect_tab()
-    with tabs[1]:
-        journal()
-    with tabs[2]:
-        gaps()
-    with tabs[3]:
-        feedback()
-    with tabs[4]:
-        docs()
-    with tabs[5]:
-        reference()
-    with tabs[6]:
-        expert_queue()
-    with tabs[7]:
-        quality()
-    with tabs[8]:
-        security()
-    with tabs[9]:
-        system()
+    tabs = st.tabs(["Эффект", "Спрос", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы",
+                    "Справочник", "Вопросы эксперту", "Качество", "Безопасность", "Система"])
+    for tab, show in zip(tabs, (effect_tab, demand_tab, journal, gaps, feedback, docs, reference, expert_queue,
+                                quality, security, system)):
+        with tab:
+            show()

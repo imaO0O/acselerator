@@ -165,7 +165,8 @@ def revision_dialog(number: str) -> None:
                  key=f"rev-ok-{number}", disabled=not letter.strip()):
         from app.ui_chat import open_in_chat
         role = ctx()["role"]
-        res = get_agent().ask(f"Подготовь ТКП по письму клиента:\n{letter.strip()}", role=role, user=ctx()["login"])
+        res = get_agent().ask(f"Подготовь ТКП по письму клиента:\n{letter.strip()}", role=role, user=ctx()["login"],
+                              count_demand=False)        # тот же запрос клиента — в спрос второй раз не идёт
         open_in_chat(f"Новая редакция ТКП № {number}", res, role, tkp_revision_of=number)
         if page := st.session_state.get("chat_page"):
             st.switch_page(page)
@@ -197,10 +198,15 @@ def _record(numbers: list[str]) -> None:
         s1, s2, s3 = st.columns([2, 3, 1], vertical_alignment="bottom")
         status = s1.selectbox("Статус", tkp_registry.STATUSES, index=tkp_registry.STATUSES.index(r["status"]),
                               key=f"tkp-status-{number}")
-        comment = s2.text_input("Комментарий", placeholder="например, «выбрали конкурента — цена»",
-                                key=f"tkp-comment-{number}")
+        lost = status == "проигран" and r["status"] != "проигран"
+        comment = s2.text_input("Подробности" if lost else "Комментарий",
+                                placeholder="например, у конкурента дешевле на 12 %" if lost
+                                else "например, «клиент просит скидку»", key=f"tkp-comment-{number}")
+        reason = st.pills("Причина проигрыша — попадёт в аналитику спроса", tkp_registry.LOST_REASONS,
+                          key=f"tkp-reason-{number}") if lost else None
         if s3.button("Сохранить", key=f"tkp-save-{number}", disabled=status == r["status"] and not comment.strip()):
-            tkp_registry.set_status(number, status, ctx()["login"], ctx()["name"], comment)
+            text = "; ".join(x for x in (reason, comment.strip()) if x)
+            tkp_registry.set_status(number, status, ctx()["login"], ctx()["name"], text)
             st.rerun()
         if r["status"] not in ("заменён", "отменён") and st.button(
                 "Новая редакция", key=f"tkp-rev-{number}", icon=":material/history:",
