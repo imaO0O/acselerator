@@ -12,6 +12,9 @@
 - [x] Д3 — цены и сроки из прайса в ТКП (`kbagent/prajs.py`, демо-прайс, вкладка «Справочник»).
 - [x] Д1 — 20 писем в `eval/tkp.yaml`, исправлены ошибки разбора (Э10-11).
 - [x] Регистрация программы — реферат и депонируемые материалы собирает `scripts/make_deposit.py`; порядок и что решить — `docs/registraciya/README.md`.
+- [x] Пакет для партнёра — памятка и шаблон Excel (`docs/pilot/paket/`), загрузчик `scripts/import_partner.py`; данные партнёра исключены из git.
+- [x] Установка: PyMuPDF <2, версии пакетов в поставке — из проверенного окружения (`requirements.lock`), Streamlit без устаревшего `use_container_width` (Э11).
+- [ ] **Отправить партнёру** `docs/pilot/paket/Pamyatka_partneru.docx` (вписать контакты) и `Shablon_dannyh_dlya_pilota.xlsx` вместе с вопросами о сервере и входе.
 - [ ] **На компьютере с видеокартой:** `scripts\start_servers.bat` (создаст ключ), `python scripts\check_demo.py --clean`, `python eval\run_eval.py --questions eval\tkp.yaml --out tkp`, `python eval\run_eval.py`; при успехе — слить ветку в `main`.
 - [ ] **«Слепой» набор** (30 вопросов участника 3, файл не в репозитории): `python eval\run_eval.py --questions eval\blind.yaml --out blind` без правок агента, результат — как есть.
 - [ ] **Регистрация:** согласовать с партнёром правообладателей (в карточке — совместное владение), определить авторов, вписать на титульный лист, сохранить в PDF/A, оплатить пошлину и подать.

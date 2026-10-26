@@ -17,6 +17,15 @@ __pycache__/
 # реферат и депонируемые материалы — собираются scripts/make_deposit.py из текущего кода
 docs/registraciya/out/
 
+# данные партнёра (коммерческая тайна): документы, реестр, вопросы, справочник и прайс, результаты прогонов
+data/raw/partner/
+data/partner_import/
+eval/partner*.yaml
+eval/priemka*.yaml
+eval/results/partner*
+eval/results/priemka*
+*_oshibki.csv
+
 # документы, загруженные через чат (могут быть конфиденциальными)
 data/raw/uploaded/
 data/show/
