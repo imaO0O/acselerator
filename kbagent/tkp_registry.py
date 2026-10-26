@@ -104,6 +104,14 @@ def files(number: str) -> tuple[Path, Path]:
     return _file(number, "docx"), _file(number, "xlsx")
 
 
+def tkp_data(number: str) -> dict | None:
+    """Разбор, по которому утверждено ТКП (письмо клиента, позиции, выбор менеджера) — для новой редакции."""
+    try:
+        return json.loads(_file(number, "json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
 def approve(t: dict, text: str, login: str | None, name: str, role: str, question: str, app_name: str,
             now: dt.datetime | None = None, revision_of: str | None = None) -> dict:
     """Утверждение ТКП: номер, Word и Excel на бланке компании с этим номером, запись в реестре.
@@ -135,6 +143,7 @@ def approve(t: dict, text: str, login: str | None, name: str, role: str, questio
         docx_path, xlsx_path = files(number)
         docx_path.write_bytes(tkp.tkp_docx(text, t, name, when, app_name, number=number, terms=terms, blank=blank()))
         xlsx_path.write_bytes(tkp.tkp_xlsx(t, number, when[:10], terms, conf["company"]))
+        _file(number, "json").write_text(json.dumps(t, ensure_ascii=False), encoding="utf-8")
         record = {
             "number": number, "year": year, "seq": seq, "date": now.strftime("%Y-%m-%d %H:%M"),
             "revision_of": revision_of or "",

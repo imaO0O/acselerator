@@ -241,7 +241,6 @@ def _tkp_choice(i: int, uid: str, data: dict) -> dict:
     new["expert_ids"] = data.get("expert_ids", [])
     item["tkp"] = new
     item.pop("draft", None)                  # письмо клиенту собирается заново под выбранные приборы
-    st.session_state.pop(f"draft-{uid}", None)
     _save()
     return new
 
@@ -270,7 +269,8 @@ def _approve_tkp(i: int, key: str, data: dict) -> None:
     """Утверждение ТКП: номер из реестра, Word и Excel на бланке компании, «Эффект» и журнал — как у черновика."""
     item = _conv()["items"][i]
     record = tkp_registry.approve(data, st.session_state.get(key) or "", ctx()["login"], ctx()["name"],
-                                  item["role"], item.get("asked") or item["question"], APP_NAME)
+                                  item["role"], item.get("asked") or item["question"], APP_NAME,
+                                  revision_of=item.get("tkp_revision_of"))
     item["tkp_number"] = record["number"]
     _approve_draft(i, key)
 
@@ -282,6 +282,10 @@ def _draft_body(i: int, uid: str) -> None:
         _tkp_approved(item)
         return
     if data:
+        if item.get("tkp_revision_of"):
+            st.info(f"Новая редакция ТКП № {item['tkp_revision_of']}: при утверждении получит номер "
+                    f"{item['tkp_revision_of']}/1 (или следующий), прежняя версия в реестре станет «заменён».",
+                    icon=":material/history:")
         data = _tkp_choice(i, uid, data)
         st.caption("Сопроводительное письмо к ТКП. Позиции, характеристики и соответствие требованиям — в таблице "
                    "документа Word, они взяты из справочника параметров со ссылками на руководства; цены и сроки "
@@ -290,6 +294,8 @@ def _draft_body(i: int, uid: str) -> None:
         st.caption("Проверьте текст и источники — ссылки под ответом в чате открывают страницу с выделенным "
                    "фрагментом. Ничего не отправляется автоматически.")
     key = f"draft-{uid}"
+    if data:                                 # другой прибор — новое поле: браузер не оставит прежнее письмо
+        key += "-" + "-".join(p.get("model") or "" for p in data["positions"])
     default = tkp.draft_text(data, ctx()["name"]) if data else draft_text(item, ctx()["name"])
     text = st.text_area("Текст", value=item.get("draft") or default, height=360, key=key,
                         label_visibility="collapsed")
@@ -499,10 +505,13 @@ def result_item(question: str, r, role: str) -> dict:
             "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
 
 
-def open_in_chat(question: str, r, role: str) -> None:
-    """Новый диалог с готовым ответом — например, разбор письма из почты; чат откроется на нём."""
+def open_in_chat(question: str, r, role: str, **extra) -> None:
+    """Новый диалог с готовым ответом — например, разбор письма из почты или новая редакция ТКП из реестра
+    (extra: tkp_revision_of — номер ТКП, которое заменит эта редакция); чат откроется на нём."""
     conv = auth.new_conversation()
-    conv["items"].append(result_item(question, r, role))
+    item = result_item(question, r, role)
+    item.update(extra)
+    conv["items"].append(item)
     auth.save_conversation(_key(), conv)
     st.session_state.conv = conv
 

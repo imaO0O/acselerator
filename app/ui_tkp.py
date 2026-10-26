@@ -7,7 +7,10 @@ from kbagent import mailbox, prajs, tkp_registry
 from kbagent.actions import log_action
 from kbagent.config import settings
 
-STATUS_ICONS = {"утверждён": "🟣", "отправлен клиенту": "🔵", "выигран": "🟢", "проигран": "⚪", "отменён": "⚫"}
+STATUS_ICONS = {"утверждён": "🟣", "отправлен клиенту": "🔵", "выигран": "🟢", "проигран": "⚪", "отменён": "⚫",
+                "заменён": "◽"}
+ATTENTION_ICONS = {"expired": ":material/event_busy:", "expiring": ":material/schedule:",
+                   "silent": ":material/notifications:", "not_sent": ":material/outgoing_mail:"}
 
 
 def _money(x) -> str:
@@ -79,6 +82,7 @@ def registry_page() -> None:
     c[3].metric("Выиграно", s["won"], help=_money(s["won_total"]))
     c[4].metric("Доля выигранных", f"{s['win_rate']} %" if s["win_rate"] is not None else "—",
                 help="среди ТКП с решением клиента: выигран или проигран")
+    _attention(records)
     if not records:
         st.info("Утверждённых ТКП пока нет. ТКП попадает сюда с номером, когда его утверждают в окне "
                 "«Черновик ТКП» в чате.")
@@ -102,6 +106,72 @@ def registry_page() -> None:
         _settings()
 
 
+def _attention(records: list[dict]) -> None:
+    """ТКП, по которым нужно действие менеджера: срок истекает или истёк, клиент молчит, ТКП не отправлено."""
+    grouped: dict[str, list[dict]] = {}                    # одно ТКП — одна строка, причины через «;»
+    for a in tkp_registry.attention(records):
+        grouped.setdefault(a["record"]["number"], []).append(a)
+    if not grouped:
+        return
+    conf = tkp_registry.load_settings()
+    with st.container(border=True):
+        st.markdown(f"**Требуют внимания: {len(grouped)}**")
+        st.caption(f"Напоминание — если клиент молчит {conf['follow_up_days']} дн. после отправки или до конца срока "
+                   f"действия осталось {conf['expiring_days']} дн. и меньше. Сроки меняет администратор в условиях ТКП.")
+        for k, (number, items) in enumerate(grouped.items()):
+            r, kinds = items[0]["record"], [a["kind"] for a in items]
+            c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
+            c1.markdown(f"**{number}** · {r['client'] or 'клиент не указан'} · {_money(r['total'])}  \n"
+                        f":gray[{'; '.join(a['text'] for a in items)}]")
+            if kinds == ["not_sent"]:
+                if c2.button("Отправлен клиенту", key=f"att-sent-{k}", width="stretch",
+                             icon=":material/outgoing_mail:"):
+                    tkp_registry.set_status(number, "отправлен клиенту", ctx()["login"], ctx()["name"])
+                    st.rerun()
+            elif c2.button("Напоминание", key=f"att-rem-{k}", width="stretch", type="primary",
+                           icon=ATTENTION_ICONS[kinds[0]]):
+                reminder_dialog(number)
+            if {"expired", "expiring"} & set(kinds) and c3.button(
+                    "Новая редакция", key=f"att-rev-{k}", width="stretch", icon=":material/history:",
+                    help="Обновить ТКП с текущими ценами и сроками: номер …/1, прежняя версия — «заменён»"):
+                revision_dialog(number)
+
+
+@st.dialog("Напоминание клиенту", width="large")
+def reminder_dialog(number: str) -> None:
+    """Черновик письма-напоминания. Ничего не отправляется: менеджер копирует текст в свою почту
+    и отмечает «напомнили» — отсчёт молчания клиента начнётся заново."""
+    r = next(x for x in tkp_registry.load() if x["number"] == number)
+    st.caption(f"ТКП № {number} · {r['client'] or 'клиент не указан'}. Скопируйте текст в письмо клиенту — "
+               "автоматически ничего не отправляется.")
+    st.text_area("Текст", tkp_registry.reminder_text(r, ctx()["name"]), height=260, key=f"rem-text-{number}",
+                 label_visibility="collapsed")
+    if st.button("Отметить: напомнили клиенту", type="primary", icon=":material/task_alt:", key=f"rem-ok-{number}"):
+        tkp_registry.note(number, "напомнили клиенту", ctx()["login"], ctx()["name"])
+        st.rerun()
+
+
+@st.dialog("Новая редакция ТКП", width="large")
+def revision_dialog(number: str) -> None:
+    """Клиент поменял прибор или количество, или срок действия истёк: запрос правится, разбор открывается в чате;
+    после утверждения — номер «…/1», прежняя версия в реестре — «заменён», история сохраняется."""
+    r = next(x for x in tkp_registry.load() if x["number"] == number)
+    data = tkp_registry.tkp_data(number) or {}
+    st.caption(f"ТКП № {number}. Поправьте запрос клиента — количество, требования или приборы; разбор откроется в "
+               "чате, там же можно выбрать другой подходящий прибор. После утверждения новая редакция получит "
+               f"номер {number}/1 (или следующий), а эта версия станет «заменён».")
+    letter = st.text_area("Запрос клиента", data.get("letter") or r["question"], height=220, key=f"rev-text-{number}")
+    if st.button("Разобрать и открыть в чате", type="primary", icon=":material/arrow_forward:",
+                 key=f"rev-ok-{number}", disabled=not letter.strip()):
+        from app.ui_chat import open_in_chat
+        role = ctx()["role"]
+        res = get_agent().ask(f"Подготовь ТКП по письму клиента:\n{letter.strip()}", role=role, user=ctx()["login"])
+        open_in_chat(f"Новая редакция ТКП № {number}", res, role, tkp_revision_of=number)
+        if page := st.session_state.get("chat_page"):
+            st.switch_page(page)
+        st.rerun()
+
+
 def _record(numbers: list[str]) -> None:
     with st.container(border=True):
         number = st.selectbox("ТКП", numbers, key="tkp-pick")
@@ -109,6 +179,11 @@ def _record(numbers: list[str]) -> None:
         st.markdown(f"**{r['number']}** · {r['client'] or 'клиент не указан'} · {_money(r['total'])} · "
                     f"{STATUS_ICONS.get(r['status'], '')} {r['status']}")
         st.caption(f"Запрос: {r['question']}")
+        newer = [x["number"] for x in tkp_registry.load() if x.get("revision_of") == number]
+        if r.get("revision_of") or newer:
+            st.caption(("Редакция ТКП № " + r["revision_of"] if r.get("revision_of") else "")
+                       + (" · " if r.get("revision_of") and newer else "")
+                       + ("Заменён редакцией " + ", ".join(newer) if newer else ""))
         docx_path, xlsx_path = tkp_registry.files(number)
         b1, b2 = st.columns(2)
         if docx_path.exists():
@@ -127,6 +202,10 @@ def _record(numbers: list[str]) -> None:
         if s3.button("Сохранить", key=f"tkp-save-{number}", disabled=status == r["status"] and not comment.strip()):
             tkp_registry.set_status(number, status, ctx()["login"], ctx()["name"], comment)
             st.rerun()
+        if r["status"] not in ("заменён", "отменён") and st.button(
+                "Новая редакция", key=f"tkp-rev-{number}", icon=":material/history:",
+                help="Клиент поменял прибор или количество: номер …/1, прежняя версия — «заменён», история сохраняется"):
+            revision_dialog(number)
         st.caption("История: " + "; ".join(f"{h['at']} — {h['status']} ({h['by']})" + (f": {h['comment']}"
                                                                                       if h["comment"] else "")
                                            for h in r["history"]))
@@ -159,11 +238,16 @@ def _settings() -> None:
             prefix = a.text_input("Префикс номера", conf["prefix"], help="номер — префикс, год и порядковый: ТКП-2026-0001")
             days = b.number_input("Срок действия, дней", 0, 365, int(conf["validity_days"]),
                                   help="0 — без срока действия")
+            c, d = st.columns(2)
+            follow = c.number_input("Напомнить, если клиент молчит, дней", 0, 90, int(conf["follow_up_days"]),
+                                    help="0 — не напоминать")
+            expiring = d.number_input("Предупредить до конца срока, дней", 0, 60, int(conf["expiring_days"]))
             payment = st.text_input("Условия оплаты", conf["payment"], placeholder="например, 100 % предоплата по счёту")
             delivery = st.text_input("Условия поставки", conf["delivery"],
                                      placeholder="например, самовывоз со склада в Рязани")
             if st.form_submit_button("Сохранить условия", type="primary"):
                 tkp_registry.save_settings({"company": company, "prefix": prefix, "validity_days": days,
-                                            "payment": payment, "delivery": delivery})
+                                            "payment": payment, "delivery": delivery,
+                                            "follow_up_days": follow, "expiring_days": expiring})
                 log_action("tkp_settings", ctx()["login"], "условия ТКП", f"префикс {prefix}; срок {days} дн.")
                 st.success("Сохранено — действует для следующих ТКП.")

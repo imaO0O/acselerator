@@ -112,3 +112,10 @@ def test_revision_and_reminders(reg):
     assert rev["number"] in text and "АКИП-4143/1" in text
     reg.note(rev["number"], "напомнили клиенту", "m", "Менеджер")
     assert next(r for r in reg.load() if r["number"] == rev["number"])["history"][-1]["comment"] == "напомнили клиенту"
+
+
+def test_approved_tkp_keeps_its_data_for_a_new_revision(reg):
+    first = approve(reg, dt.datetime(2026, 10, 1, 10, 0))
+    data = reg.tkp_data(first["number"])
+    assert data and data["letter"] == LETTER and len(data["positions"]) == len(tkp.parse(LETTER, {"all"}).positions)
+    assert reg.tkp_data("ТКП-2026-9999") is None
