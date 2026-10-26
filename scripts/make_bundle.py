@@ -9,6 +9,7 @@
     agent\\            код, документы базы знаний, индекс, документы для показа, модели, llama.cpp (видеокарта NVIDIA), языки распознавания
     llama-cpu\\        llama.cpp для компьютера без видеокарты NVIDIA (install.bat подставит сам)
     wheels\\           пакеты Python для установки без интернета
+    requirements.lock версии пакетов — те же, что в окружении, где агент проверен (pip freeze)
     python-3.12.exe   установщик Python (если на компьютере его нет)
     install.bat       установка: Python → окружение .venv → пакеты из wheels\\ → нужная сборка llama.cpp
     SHA256SUMS.txt    контрольные суммы всех файлов — для проверки службой безопасности после переноса
@@ -43,7 +44,7 @@ if errorlevel 1 (
 
 echo Окружение Python и пакеты из папки wheels...
 python -m venv agent\.venv || goto :error
-agent\.venv\Scripts\python -m pip install --no-index --find-links wheels -r agent\requirements.txt || goto :error
+agent\.venv\Scripts\python -m pip install --no-index --find-links wheels -r agent\requirements.txt -c requirements.lock || goto :error
 
 where nvidia-smi >nul 2>nul
 if errorlevel 1 (
@@ -144,9 +145,15 @@ def main() -> None:
     with zipfile.ZipFile(cpu_zip) as z:
         z.extractall(out / "llama-cpu")
 
-    print("4. Пакеты Python и установщик Python")
+    print("4. Пакеты Python — тех же версий, что в окружении, где агент проверен, — и установщик Python")
+    # без закреплённых версий pip скачал бы самые новые: так в поставку чуть не попал PyMuPDF 2.0, вышедший
+    # после прогонов эталона. Пакеты, поставленные из файла или репозитория («пакет @ адрес»), не закрепляются.
+    frozen = subprocess.run([sys.executable, "-m", "pip", "freeze", "--exclude-editable"], capture_output=True,
+                            text=True, check=True).stdout.splitlines()
+    lock = out / "requirements.lock"
+    lock.write_text("".join(f"{line}\n" for line in frozen if "==" in line and " @ " not in line), encoding="utf-8")
     subprocess.run([sys.executable, "-m", "pip", "download", "-q", "-r", str(ROOT / "requirements.txt"),
-                    "-d", str(out / "wheels")], check=True)
+                    "-c", str(lock), "-d", str(out / "wheels")], check=True)
     fetch(PYTHON_URL, out / "python-3.12.exe")
 
     (out / "install.bat").write_text(INSTALL_BAT, encoding="utf-8")

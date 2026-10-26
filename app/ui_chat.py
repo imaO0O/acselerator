@@ -87,7 +87,7 @@ def _save() -> None:
 def sidebar() -> str:
     conv = _conv()
     with st.sidebar:
-        if st.button("Новый диалог", icon=":material/add_comment:", type="primary", use_container_width=True):
+        if st.button("Новый диалог", icon=":material/add_comment:", type="primary", width="stretch"):
             st.session_state.conv = auth.new_conversation()
             st.rerun()
         convs = auth.list_conversations(_key())
@@ -103,7 +103,7 @@ def sidebar() -> str:
                 active = c["id"] == conv["id"]
                 left, right = box.columns([7, 1], vertical_alignment="center", gap="small")
                 if left.button(c["title"], key=f"conv-{c['id']}", type="secondary" if active else "tertiary",
-                               use_container_width=True, help=c["updated"]):
+                               width="stretch", help=c["updated"]):
                     st.session_state.conv = auth.load_conversation(_key(), c["id"]) or auth.new_conversation()
                     st.rerun()
                 if right.button(":material/delete:", key=f"del-{c['id']}", type="tertiary", help="Удалить диалог"):
@@ -111,7 +111,7 @@ def sidebar() -> str:
                     if active:
                         st.session_state.conv = auth.new_conversation()
                     st.rerun()
-        with st.popover("Где искать ответ", icon=":material/tune:", use_container_width=True):
+        with st.popover("Где искать ответ", icon=":material/tune:", width="stretch"):
             mode = st.radio("Где искать ответ", list(ROUTES), key="route_mode", label_visibility="collapsed",
                             help="Обычно агент сам выбирает: документы, учётная база или оба источника")
             if ctx()["is_admin"]:
@@ -152,11 +152,11 @@ def show_source(s: dict, key: str) -> None:
         best = max(found for _, _, found in shots)
         hits = [(page, png) for page, png, found in shots if found and found >= max(3, best // 5)]
         for page, png in hits:
-            st.image(png, caption=f"Страница {page} — фрагмент выделен", use_container_width=True)
+            st.image(png, caption=f"Страница {page} — фрагмент выделен", width="stretch")
         if st.toggle("Показать страницу целиком", key=f"whole-{key}") or not hits:
             for page in [page for page, _ in hits] or [s["page"]]:
                 png, _ = page_png(str(path), page, s["text"])
-                st.image(png, caption=f"Страница {page} файла «{path.name}»", use_container_width=True)
+                st.image(png, caption=f"Страница {page} файла «{path.name}»", width="stretch")
     elif path and path.suffix.lower() == ".docx":
         st.caption("В документе Word нет страниц — ссылка указывает раздел и пункт.")
     with st.expander("Текст фрагмента", expanded=not is_pdf):
@@ -315,9 +315,9 @@ def render_answer(item: dict, i: int) -> None:
             # одна запись уже изложена в ответе — карточка «поле — значение» свёрнута, чтобы не повторять текст
             df = pd.DataFrame({"Поле": df.columns, "Значение": [str(v) for v in df.iloc[0]]})
             with st.expander("Запись в учёте — все поля", icon=":material/table_rows:"):
-                st.dataframe(df, hide_index=True, use_container_width=True)
+                st.dataframe(df, hide_index=True, width="stretch")
         else:
-            st.dataframe(df, hide_index=True, use_container_width=True)
+            st.dataframe(df, hide_index=True, width="stretch")
         if _debug() and item.get("sql"):
             with st.expander("Запрос к учётной базе"):
                 st.code(item["sql"], language="sql")
@@ -336,7 +336,7 @@ def render_answer(item: dict, i: int) -> None:
             st.caption("Источники — нажмите, чтобы открыть фрагмент в документе")
             for s in cited:
                 if st.button(f"[{s['n']}] {_short(s['label'])}", key=f"src-{uid}-{s['n']}",
-                             icon=":material/description:", use_container_width=True):
+                             icon=":material/description:", width="stretch"):
                     show_source(s, f"{uid}-{s['n']}")
     other = [s for s in item.get("sources", []) if not s["cited"]]
     if _debug() and other and item["status"] == "answer":
@@ -412,7 +412,7 @@ def _hero() -> None:
     st.caption("Например:")
     cols = st.columns(2)
     for k, q in enumerate(EXAMPLES.get(ctx()["role"], CLIENT_EXAMPLES)):
-        if cols[k % 2].button(q, key=f"ex-{k}", use_container_width=True):
+        if cols[k % 2].button(q, key=f"ex-{k}", width="stretch"):
             st.session_state.pending = q
             st.rerun()
 

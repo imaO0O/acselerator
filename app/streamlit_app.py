@@ -58,7 +58,7 @@ def login_page() -> None:
         with st.form("login"):
             login = st.text_input("Логин")
             password = st.text_input("Пароль", type="password")
-            submitted = st.form_submit_button("Войти", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Войти", type="primary", width="stretch")
         if submitted:
             user = auth.authenticate(login, password)
             locked = auth.locked_for(login)

@@ -57,7 +57,7 @@ def journal() -> None:
     df.columns = ["Время", "Пользователь", "Роль", "Вопрос", "Понят как", "Источник", "Итог", "Секунд",
                   "Ссылки", "Ответ"]
     st.caption(f"Записей: {len(df)}. Журнал хранится в logs/audit.jsonl на сервере.")
-    st.dataframe(df, hide_index=True, use_container_width=True, height=min(480, 35 * (len(df) + 1) + 3),
+    st.dataframe(df, hide_index=True, width="stretch", height=min(480, 35 * (len(df) + 1) + 3),
                  column_config={"Ответ": st.column_config.TextColumn(width="large")})
     st.download_button("Выгрузить в CSV", _csv(df), file_name="zhurnal_zaprosov.csv", icon=":material/download:")
 
@@ -87,7 +87,7 @@ def gaps() -> None:
                             "Последний раз": display(t["last"])[:16],
                             "Другие формулировки": "; ".join(t["other"]) or "—",
                             "Ответ есть для ролей": ", ".join(t["other_roles"]) or "—"} for t in opened])
-        st.dataframe(df, hide_index=True, use_container_width=True,
+        st.dataframe(df, hide_index=True, width="stretch",
                      column_config={"Тема (как спрашивали чаще всего)": st.column_config.TextColumn(width="large"),
                                     "Другие формулировки": st.column_config.TextColumn(width="large"),
                                     "Ответ есть для ролей": st.column_config.TextColumn(
@@ -102,7 +102,7 @@ def gaps() -> None:
             st.dataframe(pd.DataFrame([{"Тема": t["question"], "Раз спрашивали": t["count"],
                                         "Роли": ", ".join(t["roles"]), "Без ответа до": display(t["last"])[:16],
                                         "Закрыт": display(t["closed"])[:16]} for t in closed]),
-                         hide_index=True, use_container_width=True,
+                         hide_index=True, width="stretch",
                          column_config={"Тема": st.column_config.TextColumn(width="large")})
 
 
@@ -131,7 +131,7 @@ def security() -> None:
         df = df[df["action"].isin(kinds)]
     df = df.fillna("—").replace("", "—")
     df.columns = ["Время", "Событие", "Пользователь", "Объект", "Подробности"]
-    st.dataframe(df, hide_index=True, use_container_width=True, height=min(420, 35 * (len(df) + 1) + 3))
+    st.dataframe(df, hide_index=True, width="stretch", height=min(420, 35 * (len(df) + 1) + 3))
     st.download_button("Выгрузить в CSV", _csv(df), file_name="zhurnal_deystviy.csv", icon=":material/download:",
                        key="actions-csv")
 
@@ -149,7 +149,7 @@ def feedback() -> None:
     c3.metric("Доля полезных", f"{up / max(up + down, 1):.0%}")
     df = df.fillna("—").replace("", "—")
     df.columns = ["Время", "Пользователь", "Оценка", "Вопрос", "Ответ", "Комментарий"]
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.dataframe(df, hide_index=True, width="stretch")
     st.caption("Вопросы с 👎 — кандидаты в эталонный набор (eval/questions.yaml): после исправления "
                "они проверяются при каждом прогоне.")
     st.download_button("Выгрузить в CSV", _csv(df), file_name="otsenki.csv", icon=":material/download:")
@@ -244,7 +244,7 @@ def docs() -> None:
     df = df.fillna("—")
     df.columns = ["Документ", "Версия", "Срок действия", "Владелец", "Приоритет", "Доступ", "Статус", "Заменён на"]
     st.markdown("**Реестр документов базы знаний**")
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.dataframe(df, hide_index=True, width="stretch")
     st.caption("Отменённые редакции хранятся для истории, но в поиске не участвуют. Документ, который ещё не вступил "
                "в силу, видит только администратор. Если срок действия истёк, ссылка и ответ помечаются "
                "предупреждением — замените документ новой редакцией. Приоритет 1 — главный источник при "
@@ -267,12 +267,12 @@ def reference() -> None:
     if rep.errors:
         st.warning("Строки, не прошедшие проверку, не загружены:")
         st.dataframe(pd.DataFrame(rep.errors).rename(columns={"line": "Строка файла", "error": "Причина"}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
     if rep.contradictions:
         st.info("Источники расходятся — агент показывает оба значения и передаёт вопрос эксперту:")
         st.dataframe(pd.DataFrame([{"Модель": x["model"], "Параметр": x["param"],
                                     "Значения": "; ".join(f"{v['value']} (с. {v['page']})" for v in x["values"])}
-                                   for x in rep.contradictions]), hide_index=True, use_container_width=True)
+                                   for x in rep.contradictions]), hide_index=True, width="stretch")
     with st.container(border=True):
         st.markdown("**Загрузить новую версию справочника**")
         st.caption("Файл проверяется до замены: пропуски, единицы, числа, страницы, документы. Повторяющиеся строки "
@@ -299,7 +299,7 @@ def reference() -> None:
         flt = st.text_input("Найти модель или параметр", key="spr-filter", placeholder="например, 4143 или полоса")
         if flt:
             df = df[df.apply(lambda r: flt.lower() in f"{r['Модель']} {r['Параметр']}".lower(), axis=1)]
-        st.dataframe(df, hide_index=True, use_container_width=True, height=360)
+        st.dataframe(df, hide_index=True, width="stretch", height=360)
         st.download_button("Скачать справочник (CSV)", spravochnik.PATH.read_bytes(), file_name="spravochnik.csv",
                            icon=":material/download:", key="spr-dl")
     price_list()
@@ -324,7 +324,7 @@ def price_list() -> None:
     if rep.errors and prices:
         st.warning("Строки, не прошедшие проверку, не загружены:")
         st.dataframe(pd.DataFrame(rep.errors).rename(columns={"line": "Строка файла", "error": "Причина"}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
     if rep.conflicts:
         st.warning("У этих моделей в прайсе разные цены — цена в ТКП не подставляется, пока прайс не исправят: "
                    + "; ".join(f"{x['model']}: {', '.join(x['prices'])}" for x in rep.conflicts))
@@ -357,7 +357,7 @@ def price_list() -> None:
         df = pd.DataFrame([{"Модель": p.model, "Цена": prajs.money(p.price), "Срок поставки": p.lead,
                             "Действует с": prajs.shown_date(p.since) + (" — проверить" if p.stale else ""),
                             "Примечание": p.note} for p in prices.values()])
-        st.dataframe(df, hide_index=True, use_container_width=True, height=300)
+        st.dataframe(df, hide_index=True, width="stretch", height=300)
         st.download_button("Скачать прайс (CSV)", prajs.PATH.read_bytes(), file_name="prajs.csv",
                            icon=":material/download:", key="prajs-dl")
 
@@ -452,14 +452,14 @@ def effect_tab() -> None:
                    icon=":material/sync_problem:")
         st.dataframe(pd.DataFrame([{"Когда": display(r["time"])[:16], "Что": r["kind"], "Сотрудник": r["user"],
                                     "Вопрос": r["question"][:90], "Почему": "; ".join(r["reasons"])}
-                                   for r in reversed(stale)]), hide_index=True, use_container_width=True)
+                                   for r in reversed(stale)]), hide_index=True, width="stretch")
     if records:
         st.markdown("**Утверждённые ответы и ТКП**")
         st.dataframe(pd.DataFrame([{"Когда": display(r["time"])[:16], "Что": r["kind"], "Сотрудник": r["user"],
                                     "Вопрос": r["question"][:90],
                                     "От вопроса до утверждения": fmt(r["seconds"] / 60),
                                     "Позиций": r.get("positions") or "—"} for r in reversed(records)]),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
     else:
         st.info("Пока ничего не утверждено: кнопка «Черновик» или «Черновик ТКП» под ответом в чате → "
                 "«Утвердить и скачать».")
