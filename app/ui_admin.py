@@ -18,7 +18,8 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import backup, demand, effect, experts, folder_sync, onec, prajs, spravochnik, tkp_registry
+from kbagent import (backup, demand, effect, experts, folder_sync, onec, pilot_report, prajs, spravochnik,
+                     tkp_registry)
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -492,6 +493,34 @@ def expert_queue() -> None:
                            f"{it.get('note') or '—'}")
 
 
+def pilot_report_box() -> None:
+    """Отчёт о пилоте в Word за период — для заказчика, отзыва и заявки на грант."""
+    import datetime as dt
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 2], vertical_alignment="bottom")
+        today = dt.date.today()
+        period = c1.date_input("Отчёт о пилоте за период", (today - dt.timedelta(days=30), today),
+                               max_value=today, format="DD.MM.YYYY", key="pilot-period")
+        if not (isinstance(period, tuple) and len(period) == 2):
+            c2.caption("Выберите начало и конец периода")
+            return
+        if c2.button("Сформировать отчёт (Word)", icon=":material/summarize:", key="pilot-make", width="stretch"):
+            data = pilot_report.collect(*period)
+            st.session_state.pilot_docx = (pilot_report.report_docx(
+                data, tkp_registry.load_settings().get("company", ""),
+                "AI-агент для поиска ответов по внутренней документации и базам данных предприятия"), period)
+            log_action("pilot_report", ctx()["login"], f"{period[0]:%d.%m.%Y} — {period[1]:%d.%m.%Y}",
+                       f"вопросов: {data['questions']}")
+        st.caption("Вопросы, доля ответов со ссылкой на источник, оценки, время до утверждения против ручной "
+                   "подготовки, пробелы, эксперт, ТКП и спрос, качество на проверочных наборах, безопасность; в "
+                   "конце — место для заключения и подписей заказчика. Без персональных данных.")
+        if made := st.session_state.get("pilot_docx"):
+            doc, (since, until) = made
+            st.download_button("Скачать отчёт о пилоте", doc, file_name=f"otchet_pilot_{since:%Y%m%d}_{until:%Y%m%d}.docx",
+                               type="primary", icon=":material/download:", key="pilot-dl",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
 def effect_tab() -> None:
     """Польза в цифрах: время от вопроса до утверждённого ответа или ТКП против ручной подготовки."""
     summary = effect.summary()
@@ -540,6 +569,7 @@ def effect_tab() -> None:
     else:
         st.info("Пока ничего не утверждено: кнопка «Черновик» или «Черновик ТКП» под ответом в чате → "
                 "«Утвердить и скачать».")
+    pilot_report_box()
 
 
 def _report(path) -> dict | None:
@@ -548,8 +578,11 @@ def _report(path) -> dict | None:
         return None
     text = path.read_text(encoding="utf-8")
     total = re.search(r"вопросов: (\d+)", text)
-    return {"ok": len(re.findall(r"^\|[^|\n]+\|[^|\n]+\|[^|\n]+\| верно \|", text, re.M)),
-            "total": int(total.group(1)) if total else 0,
+    ok = len(re.findall(r"^\|[^|\n]+\|[^|\n]+\|[^|\n]+\| верно \|", text, re.M))
+    total = int(total.group(1)) if total else 0
+    if counts := pilot_report.eval_counts(path):         # по CSV: «|» в письме клиента ломает строку Markdown
+        ok, total = counts
+    return {"ok": ok, "total": total,
             "metrics": dict(re.findall(r"^\| ([^|\n]+?) \| (\d+ из \d+|[\d.]+ с) \|$", text, re.M)),
             "body": text.split("\n", 1)[1] if text.startswith("# ") else text,
             "date": (re.search(r"\((\d{4}-\d{2}-\d{2})", text) or [None, ""])[1]}

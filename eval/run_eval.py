@@ -197,7 +197,8 @@ def main():
            "|---|---|---|---|---|"] + groups
     md += ["", "| № | Группа | Вопрос | Итог | Статус | Время, с | Источник |", "|---|---|---|---|---|---|---|"]
     for r in rows:
-        question = " ".join(r["question"].split())        # письмо в несколько строк — одной строкой таблицы
+        # письмо в несколько строк — одной строкой таблицы; «|» из таблицы в письме не ломает строку отчёта
+        question = " ".join(r["question"].split()).replace("|", "\\|")
         md.append(f"| {r['id']} | {r['group']} | {question} | {'верно' if r['correct'] else 'ошибка'} | {r['status']} "
                   f"| {r['seconds']} | {r['cited'] or (r['sql'][:60].replace(chr(10), ' ') if r['sql'] else '—')} |")
     (RESULTS / f"{args.out}.md").write_text("\n".join(md) + "\n", encoding="utf-8")
