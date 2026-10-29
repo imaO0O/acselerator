@@ -537,21 +537,32 @@ def _ask(question: str, seen: bool = False) -> None:
     st.session_state.pending = question
 
 
-def _change(e: dict) -> None:
+def _ack(e: dict, last: bool) -> None:
+    changes.acknowledge(ctx()["login"], ctx().get("name", ctx()["login"]), ctx()["role"], e)
+    if last:                       # больше в блоке ничего нет — он скрывается сразу, без «Понятно»
+        changes.mark_seen(ctx()["login"])
+
+
+def _change(e: dict, last: bool = False) -> None:
     text = f"{CHANGE_ICONS[e['kind']]} **{changes.KINDS[e['kind']]}:** «{e['title']}»"
     if e.get("old_title"):
         text += f" вместо «{e['old_title']}»"
     st.markdown(text + (f" — {e['summary']}" if e.get("summary") else "") + f"  \n:gray[{display(e['time'])[:10]}]")
-    if e["kind"] == "edition":
-        st.button("Что изменилось", key=f"chg-{e['id']}", icon=":material/difference:", on_click=_ask,
-                  args=(f"Что изменилось в {e['title']}?", True))
-    elif e["kind"] in ("added", "effective"):
-        st.button("О чём документ", key=f"chg-{e['id']}", icon=":material/description:", on_click=_ask,
-                  args=(f"О чём документ «{e['title']}»?", True))
-    elif e.get("changes"):
+    if e.get("changes") and e["kind"] != "edition":
         with st.expander("Что изменилось"):
             for c in e["changes"]:
                 st.markdown(f"**п. {c['number']}** — {CLAUSE_KINDS[c['kind']]}: {c['text']}")
+    with st.container(horizontal=True):
+        if e["kind"] == "edition":
+            st.button("Что изменилось", key=f"chg-{e['id']}", icon=":material/difference:", on_click=_ask,
+                      args=(f"Что изменилось в {e['title']}?", True))
+        elif e["kind"] in ("added", "effective"):
+            st.button("О чём документ", key=f"chg-{e['id']}", icon=":material/description:", on_click=_ask,
+                      args=(f"О чём документ «{e['title']}»?", True))
+        if e.get("pending_ack"):
+            # лист ознакомления (СМК): отметка остаётся в журнале, администратор видит, кто ознакомился
+            st.button("Ознакомлен", key=f"ack-{e['id']}", icon=":material/task_alt:", type="primary",
+                      on_click=_ack, args=(e, last))
 
 
 def notices() -> None:
@@ -564,15 +575,18 @@ def notices() -> None:
     with st.container(border=True, key="doc-changes"):
         st.markdown(f"**Изменения в документах** · {len(events)}")
         for e in events[:3]:
-            _change(e)
+            _change(e, last=len(events) == 1)
         if len(events) > 3:
             with st.expander(f"Ещё изменений: {len(events) - 3}"):
                 for e in events[3:]:
                     _change(e)
         if affected:
             st.caption(f"Ответов в ваших диалогах по прежним версиям: {affected} — они помечены, их стоит переспросить.")
-        st.button("Понятно", key="chg-seen", icon=":material/done_all:", on_click=changes.mark_seen,
-                  args=(ctx()["login"],))
+        if any(e.get("pending_ack") for e in events):
+            st.caption("С новой редакцией нужно ознакомиться: отметка «Ознакомлен» попадает в лист ознакомления.")
+        if not all(e.get("pending_ack") for e in events):
+            st.button("Понятно", key="chg-seen", icon=":material/done_all:", on_click=changes.mark_seen,
+                      args=(ctx()["login"],))
 
 
 def chat_page() -> None:

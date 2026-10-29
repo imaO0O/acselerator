@@ -35,7 +35,7 @@ def test_feed_by_role_seen_and_own_uploads(tmp_settings, monkeypatch):
     assert feed("ivanov", "Инженер производства") == ["stp02_2026"]            # своё не показывается
     assert set(feed("belova", "Метролог")) == {"stp02_2026", "ri04_new", "own"}
     changes.mark_seen("belova", "2026-10-28 10:00:00")
-    assert feed("belova", "Метролог") == []
+    assert feed("belova", "Метролог") == ["stp02_2026"]       # новая редакция — пока нет отметки «Ознакомлен»
     # пользователь без отметки видит изменения за две недели, не старше
     monkeypatch.setattr(changes, "_now", lambda: "2026-09-01 09:00:00")
     changes.record("added", "old", "Старый", "all", "admin")
@@ -104,3 +104,42 @@ def test_upload_and_folder_record_changes(tmp_path, tmp_settings, monkeypatch):
     kinds = [(e["kind"], e.get("summary")) for e in changes.load()]
     assert kinds == [("added", None), ("updated", "пунктов изменено: 1")]
     assert "~~350~~ **320**" in changes.load()[-1]["changes"][0]["text"]
+
+
+def test_acknowledgment_sheet(tmp_settings, monkeypatch):
+    """Новая редакция — сотрудник отмечает «Ознакомлен»; пока не отметил, уведомление остаётся и после «Понятно»."""
+    import io
+    from docx import Document
+    from kbagent.export import ack_docx
+    monkeypatch.setattr(changes, "_now", lambda: "2026-10-28 09:00:00")
+    e = changes.record("edition", "stp02_2026", "СТП ДП-02-2026", "all", "admin", old_id="stp02_2024",
+                       old_title="СТП ДП-02-2024", note="пунктов изменено: 3")
+    folder = changes.record("updated", "manual", "Руководство", "all", "папка")      # файлы папки — без отметки
+    metro = changes.record("edition", "ri04_new", "РИ ДП-04", "metrology", "admin")
+    monkeypatch.setattr(changes, "_now", lambda: NOW)
+    assert changes.needs_ack(e) and not changes.needs_ack(folder)
+    feed = {x["id"]: x for x in changes.feed("ivanov", "Инженер производства", {}, NOW)}
+    assert feed[e["id"]]["pending_ack"] and not feed[folder["id"]]["pending_ack"] and metro["id"] not in feed
+    changes.mark_seen("ivanov", NOW)
+    assert [x["id"] for x in changes.feed("ivanov", "Инженер производства", {}, NOW)] == [e["id"]]
+    changes.acknowledge("ivanov", "Иванов И. И.", "Инженер производства", e)
+    changes.acknowledge("ivanov", "Иванов И. И.", "Инженер производства", e)          # повтор — одна отметка
+    assert changes.feed("ivanov", "Инженер производства", {}, NOW) == []
+    people = [{"login": "ivanov", "name": "Иванов И. И.", "role": "Инженер производства", "active": True},
+              {"login": "belova", "name": "Белова А. С.", "role": "Метролог", "active": True},
+              {"login": "admin", "name": "Администратор", "role": "Администратор", "active": True},
+              {"login": "old", "name": "Уволен", "role": "Метролог", "active": False}]
+    rows = changes.sheet(e, people)
+    assert [(r["login"], r["at"]) for r in rows] == [("belova", None), ("ivanov", NOW)]   # загрузивший — не в листе
+    assert [r["login"] for r in changes.sheet(metro, people)] == ["belova"]
+    assert {x["id"] for x in changes.ack_events({}, NOW)} == {metro["id"], e["id"]}
+    text = "\n".join(p.text for p in Document(io.BytesIO(ack_docx({**e, "kind_label": "Новая редакция"}, rows,
+                                                                    "Агент"))).paragraphs)
+    assert "ЛИСТ ОЗНАКОМЛЕНИЯ" in text and "СТП ДП-02-2026" in text and "Ознакомились 1 из 2" in text
+
+
+def test_registry_without_upload_date_needs_no_acknowledgment(tmp_settings):
+    catalog = {"demo": {"title": "СТП ДП-01", "effective_from": "2026-10-20", "access": "all"},
+               "new": {"title": "СТП ДП-05", "effective_from": "2026-10-20", "approved_at": "2026-10-01 10:00",
+                       "access": "all"}}
+    assert {x["doc_id"] for x in changes.ack_events(catalog, NOW)} == {"new"}

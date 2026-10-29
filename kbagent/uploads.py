@@ -221,7 +221,7 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
         _sync_access(index, replaces)
     elif replaced_same:          # тот же файл загружен заново — что изменилось, видно по прежним фрагментам
         changes.record("updated", doc_id, title, access, user,
-                       cmp=compare_clauses(old_clauses, chunk_clauses(chunks)))
+                       cmp=compare_clauses(old_clauses, chunk_clauses(chunks)), ack=True)
     else:                        # новая редакция — сотрудникам сообщается при утверждении, новый документ — сразу
         changes.record("added", doc_id, title, access, user)
     log_action("upload", user, title, f"фрагментов: {len(chunks)}; доступ: {access}"

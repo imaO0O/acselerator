@@ -7,8 +7,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app.ui_common import (ACCESS_LABELS, ROOT, ROUTE_LABELS, STATUS_LABELS, ctx, get_agent, health, index_meta,
-                           inject_css)
+from app.ui_common import (ACCESS_LABELS, APP_NAME, ROOT, ROUTE_LABELS, STATUS_LABELS, ctx, get_agent, health,
+                           index_meta, inject_css)
 from kbagent import auth
 from kbagent.config import settings
 from kbagent.actions import ACTIONS, load_actions
@@ -933,6 +933,38 @@ def users_tab() -> None:
             st.error(str(e))
 
 
+def acks_tab() -> None:
+    """Лист ознакомления: кто из сотрудников, кому документ доступен по роли, отметил «Ознакомлен» в чате."""
+    from kbagent import changes, users
+    from kbagent.export import ack_docx
+    st.caption("Новые редакции и документы, обновлённые администратором: сотрудники получают уведомление в чате и "
+               "отмечают «Ознакомлен». Здесь — кто ознакомился и кто нет; лист ознакомления в Word — для архива СМК "
+               "и аудита. Не ознакомившимся уведомление показывается при каждом входе.")
+    events = changes.ack_events()
+    if not events:
+        st.info("За последний год новых редакций, требующих ознакомления, не было. Они появятся после утверждения "
+                "новой редакции на вкладке «Документы».")
+        return
+    people = users.listing()
+    for e in events[:30]:
+        rows = changes.sheet(e, people)
+        done = sum(1 for r in rows if r["at"])
+        with st.expander(f"{changes.KINDS[e['kind']]}: {e['title']} — {display(e['time'])[:10]} · "
+                         f"ознакомились {done} из {len(rows)}", expanded=done < len(rows) and e is events[0]):
+            if e.get("old_title"):
+                st.caption(f"Вместо «{e['old_title']}»" + (f"; {e['summary']}" if e.get("summary") else ""))
+            st.progress(done / len(rows) if rows else 1.0)
+            if rows:
+                st.dataframe(pd.DataFrame([{"Сотрудник": r["name"], "Роль": r["role"],
+                                            "Ознакомлен": display(r["at"])[:16] if r["at"] else "—"} for r in rows]),
+                             hide_index=True, width="stretch")
+            st.download_button("Лист ознакомления (Word)",
+                               ack_docx({**e, "kind_label": changes.KINDS[e["kind"]]}, rows, APP_NAME),
+                               file_name=f"oznakomlenie_{e['doc_id']}.docx", icon=":material/download:",
+                               key=f"ack-docx-{e['id']}",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
 def admin_page() -> None:
     inject_css()
     if not ctx()["is_admin"]:
@@ -948,9 +980,9 @@ def admin_page() -> None:
         st.warning("Фоновые задачи: " + "; ".join(late) + ". Подробнее — вкладка «Система».",
                    icon=":material/schedule:")
     tabs = st.tabs(["Эффект", "Спрос", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы",
-                    "Справочник", "Вопросы эксперту", "Качество", "Внедрение", "Пользователи", "Безопасность",
-                    "Система"])
-    for tab, show in zip(tabs, (effect_tab, demand_tab, journal, gaps, feedback, docs, reference, expert_queue,
-                                quality, rollout_tab, users_tab, security, system)):
+                    "Ознакомление", "Справочник", "Вопросы эксперту", "Качество", "Внедрение", "Пользователи",
+                    "Безопасность", "Система"])
+    for tab, show in zip(tabs, (effect_tab, demand_tab, journal, gaps, feedback, docs, acks_tab, reference,
+                                expert_queue, quality, rollout_tab, users_tab, security, system)):
         with tab:
             show()

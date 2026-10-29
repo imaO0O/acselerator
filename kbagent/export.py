@@ -81,6 +81,56 @@ def draft_docx(text: str, item: dict, approved_by: str, approved_at: str, app_na
     return buf.getvalue()
 
 
+def _gost(doc) -> None:
+    """A4, поля 20/10/20/20 мм, Times New Roman 12 — по ГОСТ Р 7.0.97."""
+    for section in doc.sections:
+        section.page_width, section.page_height = Mm(210), Mm(297)
+        section.left_margin, section.right_margin = Mm(20), Mm(10)
+        section.top_margin, section.bottom_margin = Mm(20), Mm(20)
+    style = doc.styles["Normal"]
+    style.font.name = "Times New Roman"
+    style.font.size = Pt(12)
+    style.paragraph_format.space_after = Pt(0)
+
+
+def ack_docx(event: dict, rows: list[dict], app_name: str) -> bytes:
+    """Лист ознакомления с документом: кто и когда отметил «Ознакомлен» в чате; графа для подписи — для архива СМК."""
+    doc = Document()
+    _gost(doc)
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.add_run("ЛИСТ ОЗНАКОМЛЕНИЯ").bold = True
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run(f"с документом «{event['title']}»")
+    details = [f"Изменение: {event['kind_label']}" + (f" (вместо «{event['old_title']}»)" if event.get("old_title")
+                                                     else ""),
+               f"Дата: {display(event['time'][:10])}"]
+    if event.get("summary"):
+        details.append(f"Что изменилось: {event['summary']}")
+    for line in details:
+        doc.add_paragraph(line)
+    doc.add_paragraph()
+    table = doc.add_table(rows=1, cols=5)
+    table.style = "Table Grid"
+    for cell, label in zip(table.rows[0].cells, ["№", "Ф. И. О.", "Роль", "Ознакомлен (отметка в системе)",
+                                                 "Подпись"]):
+        cell.text = label
+        cell.paragraphs[0].runs[0].bold = True
+    for n, r in enumerate(rows, 1):
+        for cell, value in zip(table.add_row().cells, [str(n), r["name"], r["role"],
+                                                       display(r["at"])[:16] if r["at"] else "не ознакомлен", ""]):
+            cell.text = value
+    note = doc.add_paragraph()
+    done = sum(1 for r in rows if r["at"])
+    run = note.add_run(f"\nОзнакомились {done} из {len(rows)}. Отметки «Ознакомлен» сотрудники ставят в чате "
+                       f"«{app_name}» после уведомления о новой редакции; журнал отметок хранится в системе.")
+    run.italic, run.font.color.rgb = True, GRAY
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def answer_docx(item: dict, app_name: str, user: str | None = None) -> bytes:
     """item — элемент диалога чата: question, text, sources, columns/labels/rows, at, route, status."""
     doc = Document()

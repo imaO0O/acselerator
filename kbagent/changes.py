@@ -50,9 +50,13 @@ def _changes(cmp) -> list[dict]:
 
 
 def record(kind: str, doc_id: str, title: str, access: str = "all", by: str | None = None,
-           old_id: str | None = None, old_title: str | None = None, cmp=None, note: str = "") -> dict:
+           old_id: str | None = None, old_title: str | None = None, cmp=None, note: str = "",
+           ack: bool | None = None) -> dict:
+    """ack — нужно ли ознакомление под отметку; по умолчанию — для новой редакции (ACK_KINDS)."""
     event = {"id": hashlib.sha1(f"{_now()}{kind}{doc_id}".encode()).hexdigest()[:10], "time": _now(), "kind": kind,
              "doc_id": doc_id, "title": title, "access": access or "all", "by": by or "—"}
+    if ack is not None:
+        event["ack"] = ack
     if old_id:
         event.update(old_id=old_id, old_title=old_title or old_id)
     if cmp is not None:
@@ -94,8 +98,11 @@ def dated(catalog: dict, since: str, now: str | None = None) -> list[dict]:
         # утверждён в тот же день или позже даты вступления — событие уже записано при утверждении
         if start and since < f"{start} 00:00:00" and start <= today and (not made or made < start):
             old = previous.get(doc_id) or info.get("replaces")
+            # ознакомление — только для документа, внесённого через систему (загрузка, утверждение): реестр,
+            # заведённый при установке, не требует отметок задним числом
             event = {**base, "id": f"from-{doc_id}-{start}", "time": f"{start} 00:00:00",
-                     "kind": "edition" if old else "effective", "summary": f"действует с {_ru(start)}"}
+                     "kind": "edition" if old else "effective", "summary": f"действует с {_ru(start)}",
+                     "ack": bool(made)}
             if old:
                 event.update(old_id=old, old_title=catalog.get(old, {}).get("title", old))
             out.append(event)
@@ -138,11 +145,81 @@ def feed(login: str, role: str, catalog: dict | None = None, now: str | None = N
     allowed = settings.roles.get(role, {"all"})
     catalog = registry() if catalog is None else catalog
     events = [e for e in load() if since < e["time"] <= now] + dated(catalog, since, now)
+    # с чем ещё нужно ознакомиться — показывается и после «Понятно», пока сотрудник не отметит «Ознакомлен»
+    events += [e for e in ack_events(catalog, now) if not acked_at(login, e["id"])]
     latest: dict = {}
     for e in sorted(events, key=lambda e: e["time"]):
         if e.get("access", "all") in allowed and e.get("by") != login:
             latest[(e["kind"], e["doc_id"])] = e          # повтор того же — остаётся последнее
-    return sorted(latest.values(), key=lambda e: e["time"], reverse=True)
+    return sorted(({**e, "pending_ack": needs_ack(e) and not acked_at(login, e["id"])} for e in latest.values()),
+                  key=lambda e: e["time"], reverse=True)
+
+
+# ---------- лист ознакомления ----------
+# Новая редакция и вступление в силу — сотрудник отмечает «Ознакомлен» (так требует СМК: ISO 9001, лист
+# ознакомления); для обновлённого администратором документа — тоже, для файлов папки отдела — нет (их правят часто).
+ACK_KINDS = {"edition", "effective"}
+ACK_DAYS = 365          # сколько ждать отметки: старше — из напоминаний в чате уходит, в листе остаётся
+
+
+def _acks_path():
+    return settings.log_dir / "acks.jsonl"
+
+
+def needs_ack(event: dict) -> bool:
+    return bool(event.get("ack", event["kind"] in ACK_KINDS))
+
+
+def acks() -> list[dict]:
+    path = _acks_path()
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return []
+    if _CACHE.get("acks_stamp") != (str(path), stamp):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        _CACHE.update(acks_stamp=(str(path), stamp), acks=[json.loads(x) for x in lines if x.strip()])
+    return _CACHE["acks"]
+
+
+def acked_at(login: str, event_id: str) -> str | None:
+    return next((a["time"] for a in acks() if a["login"] == login and a["event_id"] == event_id), None)
+
+
+def acknowledge(login: str, name: str, role: str, event: dict) -> None:
+    from .actions import log_action
+    if acked_at(login, event["id"]):
+        return
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    with open(_acks_path(), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"time": _now(), "login": login, "name": name, "role": role, "event_id": event["id"],
+                            "doc_id": event["doc_id"], "title": event["title"]}, ensure_ascii=False) + "\n")
+    log_action("ack", login, event["title"], changes_label(event))
+
+
+def changes_label(event: dict) -> str:
+    return KINDS[event["kind"]] + (f" вместо «{event['old_title']}»" if event.get("old_title") else "")
+
+
+def ack_events(catalog: dict | None = None, now: str | None = None, days: int = ACK_DAYS) -> list[dict]:
+    """Изменения, с которыми нужно ознакомиться, за days дней — новые сверху."""
+    from .ingest import registry
+    now = now or _now()
+    since = (dt.datetime.strptime(now, "%Y-%m-%d %H:%M:%S") - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    catalog = registry() if catalog is None else catalog
+    events = [e for e in load() + dated(catalog, since, now) if since < e["time"] <= now and needs_ack(e)]
+    return sorted({e["id"]: e for e in events}.values(), key=lambda e: e["time"], reverse=True)
+
+
+def sheet(event: dict, people: list[dict]) -> list[dict]:
+    """Лист ознакомления: кому документ доступен по роли (кроме загрузившего) и когда отмечено «Ознакомлен»."""
+    rows = []
+    for u in people:
+        if u.get("active", True) and u["login"] != event.get("by") and \
+                event.get("access", "all") in settings.roles.get(u["role"], set()):
+            rows.append({"login": u["login"], "name": u.get("name", u["login"]), "role": u["role"],
+                         "at": acked_at(u["login"], event["id"])})
+    return sorted(rows, key=lambda r: (r["at"] is not None, r["name"]))
 
 
 def _stamp(item: dict) -> str:
