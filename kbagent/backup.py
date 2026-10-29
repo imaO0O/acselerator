@@ -146,7 +146,7 @@ def copy_dir() -> Path | None:
 def same_disk(target: Path, root: Path = ROOT) -> bool:
     """Копия на том же диске, что и система, от отказа диска не спасёт. Windows — по букве диска или сетевому
     ресурсу (\\\\server\\share), Linux — по устройству файловой системы."""
-    t, r = target.resolve(), root.resolve()
+    t, r = Path(os.path.abspath(target)), Path(os.path.abspath(root))     # без обращения к сети, как resolve()
     if t.drive or r.drive:
         return t.drive.lower() == r.drive.lower()
     while not t.exists() and t != t.parent:

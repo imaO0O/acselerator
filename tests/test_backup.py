@@ -86,9 +86,10 @@ def test_copy_to_another_disk_is_verified_there(tmp_path, tmp_settings, monkeypa
     target = tmp_path / "копии"
     rep = backup.copy_to(archive, target)
     assert rep["ok"] and (target / archive.name).exists() and backup.verify(target / archive.name)
-    assert backup.last_copy()["ok"] and rep["same_disk"]          # во временной папке — тот же диск
+    # временная папка — на диске системы или нет (в CI на Windows проект на D:, временные файлы на C:)
+    assert backup.last_copy()["ok"] and rep["same_disk"] == backup.same_disk(target)
     monkeypatch.setenv("KB_BACKUP_COPY", str(target))
-    assert any("том же диске" in w for w in jobs.warnings([]))
+    assert any("том же диске" in w for w in jobs.warnings([])) == rep["same_disk"]
     # испорченная копия не остаётся под именем архива
     monkeypatch.setattr(backup, "verify", lambda p: (_ for _ in ()).throw(ValueError("контрольная сумма")))
     bad = backup.copy_to(archive, tmp_path / "другая")
