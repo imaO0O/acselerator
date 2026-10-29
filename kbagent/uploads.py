@@ -25,7 +25,8 @@ from . import changes
 from .actions import log_action
 from .config import settings
 from .editions import chunk_clauses, compare, compare_clauses
-from .ingest import ARCHIVE, access_of, expired_on, is_draft_edition, load_catalog, not_yet_effective, ocr_available
+from .ingest import (ARCHIVE, access_of, expired_on, group_of, is_draft_edition, load_catalog, not_yet_effective,
+                     ocr_available)
 from .text import tokenize
 from .store import Index
 
@@ -188,7 +189,7 @@ def _sync_access(index: Index, doc_id: str) -> None:
 
 def add_upload(index: Index, filename: str, data: bytes, access: str = "all", user: str | None = None,
                replaces: str | None = None, progress=None, version: str = "", effective_from: str = "",
-               owner: str = "") -> dict:
+               owner: str = "", level: int = 0) -> dict:
     """Сохраняет файл, добавляет его в каталог и индекс.
     Возвращает id, title, chunks, replaced_same (перезаписан одноимённый), ocr_pages, scanned_pages."""
     ext, data, converted = convert_upload(filename, data)
@@ -211,7 +212,8 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
     if replaces and replaces != doc_id:
         entry["replaces"] = replaces
     # реестр: версия, дата вступления в силу (до неё документ видит только администратор), владелец
-    entry.update({k: v for k, v in (("version", version), ("effective_from", effective_from), ("owner", owner)) if v})
+    entry.update({k: v for k, v in (("version", version), ("effective_from", effective_from), ("owner", owner),
+                                    ("level", level)) if v})
     _write_catalog([d for d in docs if d["id"] != doc_id] + [entry])
 
     stats: dict = {}
@@ -220,10 +222,10 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
     if replaces:
         _sync_access(index, replaces)
     elif replaced_same:          # тот же файл загружен заново — что изменилось, видно по прежним фрагментам
-        changes.record("updated", doc_id, title, access, user,
+        changes.record("updated", doc_id, title, group_of(entry), user,
                        cmp=compare_clauses(old_clauses, chunk_clauses(chunks)), ack=True)
     else:                        # новая редакция — сотрудникам сообщается при утверждении, новый документ — сразу
-        changes.record("added", doc_id, title, access, user)
+        changes.record("added", doc_id, title, group_of(entry), user)
     log_action("upload", user, title, f"фрагментов: {len(chunks)}; доступ: {access}"
                + (f"; заменяет: {replaces}" if replaces else "") + (f"; распознано страниц: {stats['ocr_pages']}"
                                                                      if stats.get("ocr_pages") else ""))
@@ -251,7 +253,7 @@ def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:
                 cmp = compare(replaced, doc_id)
             except Exception:  # noqa: BLE001 — сравнение не должно мешать утверждению
                 cmp = None
-            changes.record("edition", doc_id, info.get("title", doc_id), info.get("access", "all"), user,
+            changes.record("edition", doc_id, info.get("title", doc_id), group_of(info), user,
                            old_id=replaced, old_title=old.get("title", replaced), cmp=cmp)
     log_action("approve", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id),
                f"прежняя редакция отменена: {replaced}" if replaced else "")
@@ -281,7 +283,7 @@ def remove_upload(index: Index, doc_id: str, user: str | None = None) -> None:
     replaced = next((d.get("replaces") for d in docs if d["id"] == doc_id), None)
     entry = next((d for d in docs if d["id"] == doc_id), None)
     if entry is not None and not is_draft_edition(entry):     # неутверждённый проект редакции никто не видел
-        changes.record("removed", doc_id, entry.get("title", doc_id), entry.get("access", "all"), user)
+        changes.record("removed", doc_id, entry.get("title", doc_id), group_of(entry), user)
     _write_catalog([d for d in docs if d["id"] != doc_id])
     index.remove_document(doc_id, settings.index_dir)
     for p in UPLOAD_DIR.glob(f"{doc_id}.*"):

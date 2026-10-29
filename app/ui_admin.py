@@ -202,8 +202,11 @@ def docs() -> None:
         all_docs = documents(agent.index)
         active = {d["id"]: d["title"] for d in all_docs if d["status"] == "действует"}
         c1, c2 = st.columns(2)
-        access = c1.selectbox("Кому доступен", [k for k in ACCESS_LABELS if k != "archive"],
+        a1, a2 = c1.columns(2)
+        access = a1.selectbox("Кому доступен", [k for k in ACCESS_LABELS if k != "archive"],
                               format_func=ACCESS_LABELS.get)
+        level = a2.selectbox("Гриф", range(len(settings.levels)), format_func=lambda n: settings.levels[n],
+                             help="Документ с грифом видят только сотрудники с допуском не ниже (вкладка «Пользователи»)")
         r1, r2, r3 = st.columns(3)
         version = r1.text_input("Версия (редакция)", placeholder="например, 2026 или Изм. 2")
         start = r2.date_input("Действует с", value=None, format="DD.MM.YYYY",
@@ -221,7 +224,7 @@ def docs() -> None:
                 bar = st.progress(0.0, text=f"Читаю «{f.name}»…")
                 try:
                     res = add_upload(agent.index, f.name, f.getvalue(), access=access, user=ctx()["login"],
-                                     replaces=replaces, version=version.strip(), owner=owner.strip(),
+                                     replaces=replaces, version=version.strip(), owner=owner.strip(), level=level,
                                      effective_from=start.isoformat() if start else "",
                                      progress=lambda done, total, b=bar, name=f.name:
                                      b.progress(done / total, text=f"«{name}»: {done} из {total} фрагментов"))
@@ -263,7 +266,8 @@ def docs() -> None:
             c1, c2, c3 = st.columns([6, 2, 1], vertical_alignment="center")
             state = ("утверждён" if d.get("approved") else
                      "проект новой редакции — виден только администратору" if d.get("replaces") else "ждёт утверждения")
-            c1.markdown(f"{d['title']}  \n:gray[{ACCESS_LABELS.get(d.get('access'), d.get('access'))} · "
+            grif = f" · гриф «{settings.levels[d['level']]}»" if d.get("level") else ""
+            c1.markdown(f"{d['title']}  \n:gray[{ACCESS_LABELS.get(d.get('access'), d.get('access'))}{grif} · "
                         f"загрузил {d.get('uploaded_by') or '—'} {d.get('uploaded_at', '')} · {state}]")
             if not d.get("approved") and c2.button("Утвердить", key=f"ok-{d['id']}", icon=":material/check:"):
                 approve_upload(agent.index, d["id"], user=ctx()["login"])
@@ -927,19 +931,23 @@ def users_tab() -> None:
     people = users.listing()
     if people:
         st.dataframe(pd.DataFrame([{"Логин": u["login"], "Имя": u["name"], "Роль": u["role"],
+                                    "Допуск": settings.levels[u["clearance"]],
                                     "Статус": "заблокирован" if not u["active"] else (
                                         "ждёт смены пароля" if u["must_change"] else "активен"),
                                     "Создан": u.get("created", "—")} for u in people]),
                      hide_index=True, width="stretch")
     with st.form("user-add", clear_on_submit=True):
         st.markdown("**Новый пользователь**")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         login = c1.text_input("Логин", placeholder="ivanov")
         name = c2.text_input("Имя", placeholder="Иванов И. И., инженер техпродаж")
         role = c3.selectbox("Роль", list(settings.roles))
+        level = c4.selectbox("Допуск", range(len(settings.levels)), format_func=lambda n: settings.levels[n],
+                             help="К документам с грифом не выше этого")
         if st.form_submit_button("Создать", type="primary"):
             try:
-                st.session_state.users_temp = (login.strip().lower(), users.add(login, name, role, ctx()["login"]))
+                st.session_state.users_temp = (login.strip().lower(), users.add(login, name, role, ctx()["login"],
+                                                                               clearance=level))
             except users.UserError as e:
                 st.session_state.users_note = ("error", str(e))
             st.rerun()
@@ -950,14 +958,16 @@ def users_tab() -> None:
         login = st.selectbox("Пользователь", [u["login"] for u in people], key="user-pick",
                              format_func=lambda x: next(f"{u['login']} — {u['name']}" for u in people if u["login"] == x))
         u = next(x for x in people if x["login"] == login)
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         role = c1.selectbox("Роль", list(settings.roles), index=list(settings.roles).index(u["role"]),
                             key=f"user-role-{login}")
-        active = c2.toggle("Доступ разрешён", value=u["active"], key=f"user-active-{login}")
+        level = c2.selectbox("Допуск", range(len(settings.levels)), index=u["clearance"],
+                             format_func=lambda n: settings.levels[n], key=f"user-level-{login}")
+        active = c3.toggle("Доступ разрешён", value=u["active"], key=f"user-active-{login}")
         b1, b2, b3 = st.columns(3)
         try:
             if b1.button("Сохранить", key=f"user-save-{login}", type="primary"):
-                users.update(login, ctx()["login"], role=role, active=active)
+                users.update(login, ctx()["login"], role=role, active=active, clearance=level)
                 st.session_state.users_note = ("success", f"«{login}» сохранён.")
                 st.rerun()
             if b2.button("Сбросить пароль", key=f"user-reset-{login}"):

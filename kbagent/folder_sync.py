@@ -30,7 +30,7 @@ from . import changes
 from .actions import log_action
 from .config import settings
 from .editions import chunk_clauses, compare_clauses
-from .ingest import load_catalog
+from .ingest import group_of, load_catalog
 
 MIRROR = settings.raw_dir / "folder"
 STATE = "sync_state.json"
@@ -149,10 +149,10 @@ def sync(index, source: Path, index_dir: Path | None = None, mirror: Path | None
             before = chunk_clauses([c for c in index.chunks if c.doc_id == doc_id]) if known else []
             chunks = index.add_document(path, {**load_catalog(settings.raw_dir), **catalog}, index_dir)
             if known:
-                changes.record("updated", doc_id, entry["title"], entry.get("access", "all"), user,
+                changes.record("updated", doc_id, entry["title"], group_of(entry), user,
                                cmp=compare_clauses(before, chunk_clauses(chunks)))
             else:
-                changes.record("added", doc_id, entry["title"], entry.get("access", "all"), user)
+                changes.record("added", doc_id, entry["title"], group_of(entry), user)
             files_state[rel] = {"doc_id": doc_id, "size": size, "mtime": mtime, "sha256": digest,
                                 "chunks": len(chunks)}
             (rep.updated if known else rep.added).append(rel)
@@ -169,7 +169,7 @@ def sync(index, source: Path, index_dir: Path | None = None, mirror: Path | None
         for rel in gone:
             doc_id = files_state.pop(rel)["doc_id"]
             gone_entry = catalog.get(doc_id, {})
-            changes.record("removed", doc_id, gone_entry.get("title", rel), gone_entry.get("access", "all"), user)
+            changes.record("removed", doc_id, gone_entry.get("title", rel), group_of(gone_entry), user)
             index.remove_document(doc_id, index_dir)
             for old in mirror.glob(f"{doc_id}.*"):
                 old.unlink()

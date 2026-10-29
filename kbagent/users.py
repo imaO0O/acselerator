@@ -41,10 +41,24 @@ def _save(users: list[dict]) -> None:
     tmp.replace(settings.users_path)
 
 
+def _clearance(user: dict) -> int:
+    if "clearance" in user:
+        return int(user["clearance"])
+    # администратор базы знаний работает со всеми документами; остальным — без грифа, пока не назначен допуск
+    return len(settings.levels) - 1 if user.get("role") == "Администратор" else 0
+
+
+def clearance(login: str | None) -> int:
+    """Уровень допуска к документам с грифом; неизвестный пользователь (служебный прогон) — без допуска."""
+    user = next((u for u in _load() if u["login"] == login), None) if login else None
+    return _clearance(user) if user else 0
+
+
 def listing() -> list[dict]:
     """Пользователи без хэшей паролей — для таблицы администратора."""
     return [{k: v for k, v in u.items() if k != "password_hash"} | {"active": u.get("active", True),
-                                                                    "must_change": u.get("must_change", False)}
+                                                                    "must_change": u.get("must_change", False),
+                                                                    "clearance": _clearance(u)}
             for u in _load()]
 
 
@@ -77,7 +91,7 @@ def _find(users: list[dict], login: str) -> dict:
     return user
 
 
-def add(login: str, name: str, role: str, by: str | None) -> str:
+def add(login: str, name: str, role: str, by: str | None, clearance: int | None = None) -> str:
     """Новый пользователь; возвращает временный пароль — показать администратору один раз."""
     login = login.strip().lower()
     if not LOGIN_RE.match(login):
@@ -90,8 +104,11 @@ def add(login: str, name: str, role: str, by: str | None) -> str:
     password = temporary_password()
     users.append({"login": login, "name": name.strip() or login, "role": role, "password_hash": hash_password(password),
                   "active": True, "must_change": True, "created": time.strftime("%Y-%m-%d %H:%M")})
+    if clearance is not None:
+        users[-1]["clearance"] = clearance
     _save(users)
-    log_action("user_created", by, login, f"роль: {role}")
+    log_action("user_created", by, login, f"роль: {role}" + (f"; допуск: {settings.levels[clearance]}"
+                                                             if clearance else ""))
     return password
 
 
@@ -121,7 +138,8 @@ def change_password(login: str, old: str, new: str) -> None:
     log_action("user_password_changed", login, login, "")
 
 
-def update(login: str, by: str | None, role: str | None = None, active: bool | None = None, name: str | None = None) -> None:
+def update(login: str, by: str | None, role: str | None = None, active: bool | None = None, name: str | None = None,
+           clearance: int | None = None) -> None:
     users = _load()
     user = _find(users, login)
     if role is not None and role not in settings.roles:
@@ -140,6 +158,11 @@ def update(login: str, by: str | None, role: str | None = None, active: bool | N
     if name is not None and name.strip() and name.strip() != user["name"]:
         user["name"] = name.strip()
         changes.append(f"имя: {name.strip()}")
+    if clearance is not None and clearance != _clearance(user):
+        if not 0 <= clearance < len(settings.levels):
+            raise UserError("неизвестный уровень допуска")
+        user["clearance"] = clearance
+        changes.append(f"допуск: {settings.levels[clearance]}")
     if changes:
         _save(users)
         if active is False:

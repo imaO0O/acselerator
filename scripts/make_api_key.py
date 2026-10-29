@@ -28,6 +28,7 @@ def main():
     key = "kb_" + secrets.token_urlsafe(32)
     data = yaml.safe_load(KEYS_PATH.read_text(encoding="utf-8")) if KEYS_PATH.exists() else {}
     keys = [k for k in (data or {}).get("keys", []) if k["name"] != name]
+    # допуск к документам с грифом — по умолчанию нет; выдать — полем clearance (1, 2) в data/api_keys.yaml
     keys.append({"name": name, "role": role, "hash": key_hash(key), "created": time.strftime("%Y-%m-%d %H:%M")})
     KEYS_PATH.write_text("# Ключи API: только хэши. Выпуск — scripts/make_api_key.py\n"
                          + yaml.safe_dump({"keys": keys}, allow_unicode=True, sort_keys=False), encoding="utf-8")

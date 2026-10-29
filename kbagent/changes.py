@@ -83,7 +83,7 @@ def load() -> list[dict]:
 
 def dated(catalog: dict, since: str, now: str | None = None) -> list[dict]:
     """События по датам реестра после since: вступление в силу (утверждённого заранее) и окончание срока."""
-    from .ingest import _date, _ru, is_draft_edition
+    from .ingest import _date, _ru, group_of, is_draft_edition
     now = now or _now()
     today = now[:10]
     previous = {info["replaced_by"]: doc_id for doc_id, info in catalog.items() if info.get("replaced_by")}
@@ -93,8 +93,7 @@ def dated(catalog: dict, since: str, now: str | None = None) -> list[dict]:
             continue
         start, end = _date(info.get("effective_from")), _date(info.get("effective_to"))
         made = str(info.get("approved_at") or info.get("uploaded_at") or "")[:10]
-        base = {"doc_id": doc_id, "title": info.get("title", doc_id), "access": info.get("access", "all"),
-                "by": "реестр"}
+        base = {"doc_id": doc_id, "title": info.get("title", doc_id), "access": group_of(info), "by": "реестр"}
         # утверждён в тот же день или позже даты вступления — событие уже записано при утверждении
         if start and since < f"{start} 00:00:00" and start <= today and (not made or made < start):
             old = previous.get(doc_id) or info.get("replaces")
@@ -135,14 +134,15 @@ def mark_seen(login: str, when: str | None = None) -> None:
 
 
 def feed(login: str, role: str, catalog: dict | None = None, now: str | None = None,
-         since: str | None = None) -> list[dict]:
+         since: str | None = None, clearance: int | None = None) -> list[dict]:
     """Ещё не просмотренные изменения документов, доступных роли, — новые сверху; свои загрузки не показываются.
     since — с этого момента, а не с прошлого просмотра (REST API)."""
-    from .ingest import registry
+    from . import users
+    from .ingest import allowed_groups, registry
     now = now or _now()
     since = since or seen_at(login) or (dt.datetime.strptime(now, "%Y-%m-%d %H:%M:%S")
                                         - dt.timedelta(days=FIRST_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
-    allowed = settings.roles.get(role, {"all"})
+    allowed = allowed_groups(role, users.clearance(login) if clearance is None else clearance)
     catalog = registry() if catalog is None else catalog
     events = [e for e in load() if since < e["time"] <= now] + dated(catalog, since, now)
     # с чем ещё нужно ознакомиться — показывается и после «Понятно», пока сотрудник не отметит «Ознакомлен»
@@ -213,10 +213,11 @@ def ack_events(catalog: dict | None = None, now: str | None = None, days: int = 
 
 def sheet(event: dict, people: list[dict]) -> list[dict]:
     """Лист ознакомления: кому документ доступен по роли (кроме загрузившего) и когда отмечено «Ознакомлен»."""
+    from .ingest import allowed_groups
     rows = []
     for u in people:
         if u.get("active", True) and u["login"] != event.get("by") and \
-                event.get("access", "all") in settings.roles.get(u["role"], set()):
+                event.get("access", "all") in allowed_groups(u["role"], u.get("clearance", 0)):
             rows.append({"login": u["login"], "name": u.get("name", u["login"]), "role": u["role"],
                          "at": acked_at(u["login"], event["id"])})
     return sorted(rows, key=lambda r: (r["at"] is not None, r["name"]))

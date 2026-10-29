@@ -14,7 +14,7 @@ from .cards import build_cards, card_chunk, card_text
 from .config import settings
 from .database import answer_from_database
 from .editions import compare, edition_pairs
-from .ingest import ARCHIVE, DRAFT, registry
+from .ingest import ARCHIVE, DRAFT, allowed_groups, registry
 from .normocontrol import GOST_ID, check_docx
 from .privacy import mask, prune
 from .retriever import Hit, Retrieval, retrieve
@@ -527,7 +527,8 @@ class Agent:
                 text = tkp.letter_text(filename, data)
             except Exception:  # noqa: BLE001 — повреждённый файл: для Word — нормоконтроль скажет сам
                 text = ""
-            allowed = settings.roles.get(role, {"all"})
+            from . import users
+            allowed = allowed_groups(role, users.clearance(user))
             request = tkp.parse(text, allowed) if text.strip() else None
             if request is not None and (tkp.is_request(text, request) or tkp.TKP_WORDS_RE.search(question)) \
                     and tkp.has_offer(request):
@@ -750,10 +751,11 @@ class Agent:
         combined.asked = asked if asked != question else None
         return combined
 
-    def search_baseline(self, question: str, role: str, top: int = 5) -> dict:
+    def search_baseline(self, question: str, role: str, top: int = 5, user: str | None = None) -> dict:
         """Что выдал бы обычный поиск по словам: документы (без ответа) и сколько в них страниц —
         для сравнения на показе. Без моделей, за миллисекунды."""
-        allowed = settings.roles.get(role, {"all"})
+        from . import users
+        allowed = allowed_groups(role, users.clearance(user))
         if not hasattr(self, "_pages"):
             pages: dict[str, int] = {}
             for c in self.index.chunks:
@@ -771,8 +773,10 @@ class Agent:
 
     def ask(self, question: str, role: str = "Администратор", route: str = "auto",
             history: list[dict] | None = None, on_step: Callable[[str], None] | None = None,
-            user: str | None = None, log: bool = True, count_demand: bool = True) -> AgentResult:
-        """count_demand=False — новая редакция уже учтённого запроса клиента: в аналитику спроса повторно не идёт."""
+            user: str | None = None, log: bool = True, count_demand: bool = True,
+            clearance: int | None = None) -> AgentResult:
+        """count_demand=False — новая редакция уже учтённого запроса клиента: в аналитику спроса повторно не идёт.
+        clearance — допуск к документам с грифом; по умолчанию — из учётной записи user (ключ API передаёт свой)."""
         t0 = time.time()
         step = on_step or (lambda _: None)
         if settings.db_path == demo_db.DB:
@@ -780,7 +784,10 @@ class Agent:
         # индекс мог изменить другой процесс — обработка папки документов (scripts/sync_folder.py)
         self.index.reload_if_changed(settings.index_dir)
         self._sync_registry()
-        allowed = settings.roles.get(role, {"all"})
+        if clearance is None:
+            from . import users
+            clearance = users.clearance(user)
+        allowed = allowed_groups(role, clearance)
 
         # «игнорируй инструкции и…», «ответь без документов, своими словами» — отвечаем на сам вопрос
         base = re.sub(r"^[\s,;:.!—-]+", "", META_RE.sub("", question)).strip() or question

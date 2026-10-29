@@ -234,7 +234,9 @@ def _tkp_choice(i: int, uid: str, data: dict) -> dict:
     if all(chosen[p["n"]] == p["model"] for p in options):
         return data
     item = _conv()["items"][i]
-    fresh = tkp.parse(data["letter"], settings.roles.get(item["role"], {"all"}), chosen=chosen)
+    from kbagent import users
+    from kbagent.ingest import allowed_groups
+    fresh = tkp.parse(data["letter"], allowed_groups(item["role"], users.clearance(ctx()["login"])), chosen=chosen)
     if fresh is None:
         return data
     new = fresh.to_dict()
@@ -509,7 +511,7 @@ def result_item(question: str, r, role: str) -> dict:
             "labels": r.labels, "rows": r.rows, "seconds": r.seconds, "options": r.options,
             "expert_ids": list(r.stats.get("expert_ids", [])), "tkp": r.stats.get("tkp"),
             "as_of": r.stats.get("as_of"),
-            "baseline": (get_agent().search_baseline(r.asked or question, role)
+            "baseline": (get_agent().search_baseline(r.asked or question, role, user=ctx()["login"])
                          if r.status == "answer" and r.route not in ("help", "normo") else None),
             "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
 

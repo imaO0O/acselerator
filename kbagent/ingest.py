@@ -358,6 +358,9 @@ def registry_suffix(doc_id: str, raw_dir: Path | None = None) -> str:
     у истёкшего — «срок действия истёк 31.12.2025»; ничего не известно — «версия не указана». Каталог перечитывается, только если файлы изменились."""
     info = registry_info(doc_id, raw_dir)
     parts = []
+    from .config import settings
+    if level := level_of(info):
+        parts.append(f"гриф «{settings.levels[min(level, len(settings.levels) - 1)]}»")
     if info.get("version"):
         parts.append(f"ред. {info['version']}")
     if expired_on(info):
@@ -374,11 +377,32 @@ def is_draft_edition(info: dict) -> bool:
     return bool(info.get("replaces")) and not info.get("approved", True)
 
 
+def level_of(info: dict) -> int:
+    try:
+        return max(int(info.get("level") or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def group_of(info: dict) -> str:
+    """Группа доступа с грифом: «metrology» → «metrology@1» (для служебного пользования); без грифа — как есть.
+    Так допуск проверяется везде, где проверяется группа: поиск, справочник, ТКП, уведомления."""
+    base, level = info.get("access", "all"), level_of(info)
+    return f"{base}@{level}" if level else base
+
+
+def allowed_groups(role: str, clearance: int = 0) -> set[str]:
+    """Группы роли и те же группы с грифом до уровня допуска сотрудника."""
+    from .config import settings
+    base = settings.roles.get(role, {"all"})
+    return set(base) | {f"{g}@{level}" for g in base for level in range(1, max(clearance, 0) + 1)}
+
+
 def access_of(info: dict) -> str:
     if is_cancelled(info):
         return ARCHIVE
     # проект новой редакции и документ, который ещё не вступил в силу, видит только администратор
-    return DRAFT if is_draft_edition(info) or not_yet_effective(info) else info.get("access", "all")
+    return DRAFT if is_draft_edition(info) or not_yet_effective(info) else group_of(info)
 
 
 def parse_document(path: Path, catalog: dict, stats: dict | None = None) -> list[Chunk]:

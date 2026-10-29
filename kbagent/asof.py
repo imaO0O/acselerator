@@ -10,7 +10,7 @@ import datetime as dt
 import re
 from dataclasses import dataclass
 
-from .ingest import _date, _ru, is_cancelled, is_draft_edition
+from .ingest import _date, _ru, group_of, is_cancelled, is_draft_edition
 
 MONTHS = ["январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"]
 MONTH_FORMS = r"январ[яе]|феврал[яе]|март[ае]?|апрел[яе]|ма[яе]|июн[яе]|июл[яе]|август[ае]?|сентябр[яе]|октябр[яе]|ноябр[яе]|декабр[яе]"
@@ -108,7 +108,7 @@ def scope(window: Window, allowed: set[str], doc_ids: set[str], catalog: dict) -
         if info is None:                    # нет в реестре — сроков не знаем, считаем действующим
             out.add(doc_id)
             continue
-        if is_draft_edition(info) or info.get("access", "all") not in allowed:
+        if is_draft_edition(info) or group_of(info) not in allowed:
             continue
         when = period(doc_id, catalog)
         if when and (not when[0] or when[0] <= window.end) and (not when[1] or when[1] >= window.start):

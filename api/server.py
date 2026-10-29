@@ -25,6 +25,7 @@ from kbagent import changes, demand, llm, tkp  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
+from kbagent.ingest import allowed_groups  # noqa: E402
 
 KEYS_PATH = ROOT / "data" / "api_keys.yaml"
 
@@ -53,7 +54,7 @@ def client(x_api_key: str | None = Header(None, description="Ключ досту
         if hmac.compare_digest(k["hash"], h):
             if k["role"] not in settings.roles:
                 raise HTTPException(500, "У ключа указана неизвестная роль")
-            return k
+            return {**k, "clearance": int(k.get("clearance", 0))}
     log_action("api_denied", None, "", "неверный ключ")
     raise HTTPException(401, "Неверный ключ доступа")
 
@@ -159,7 +160,7 @@ def doc_changes(since: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2
                 who: dict = Depends(client)) -> list[Change]:
     """Изменения документов, доступных роли ключа, — чтобы бот мессенджера публиковал их в канале отдела."""
     stamp = (since + " 00:00:00")[:19] if len(since) == 10 else (since + ":00")[:19]
-    events = changes.feed(f"api:{who['name']}", who["role"], since=stamp)
+    events = changes.feed(f"api:{who['name']}", who["role"], since=stamp, clearance=who["clearance"])
     return [Change(time=e["time"], kind=e["kind"], kind_label=changes.KINDS[e["kind"]], doc_id=e["doc_id"],
                    title=e["title"], old_title=e.get("old_title"), summary=e.get("summary", "")) for e in events]
 
@@ -176,7 +177,7 @@ def ask(req: AskRequest, who: dict = Depends(client)) -> AskResponse:
     history = [{"question": t.question[:500], "text": t.answer[:1500]} for t in req.history[-3:]]
     try:
         r = agent().ask(req.question, role=who["role"], route=req.source, history=history or None,
-                        user=f"api:{who['name']}")
+                        user=f"api:{who['name']}", clearance=who["clearance"])
     except Exception as e:      # noqa: BLE001 — сбой модели или поиска: понятный ответ вместо «500»
         log_action("api_error", f"api:{who['name']}", req.question[:120], type(e).__name__)
         raise HTTPException(503, "Сервис ответов временно недоступен, повторите запрос позже") from e
@@ -208,7 +209,7 @@ def make_tkp(req: TkpRequest, who: dict = Depends(client)) -> TkpResponse:
             raise HTTPException(422, "Не удалось прочитать файл письма") from e
     if len(letter) < 5:
         raise HTTPException(422, "Нужен текст письма (letter) или файл (file)")
-    t = tkp.parse(letter, settings.roles[who["role"]], chosen=req.choices or None)
+    t = tkp.parse(letter, allowed_groups(who["role"], who["clearance"]), chosen=req.choices or None)
     if t is None:
         log_action("api_tkp", user, letter[:120], "нет продукции из справочника")
         return TkpResponse(status="not_request", seconds=round(time.time() - t0, 2))
