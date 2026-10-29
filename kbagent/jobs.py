@@ -198,4 +198,12 @@ def warnings(rows: list[dict]) -> list[str]:
         elif r["state"] == "never" and r["key"] == "backup":
             out.append("Резервной копии ещё нет — создайте её здесь же или зарегистрируйте задачи "
                        "(scripts\\install_tasks.bat)")
+    from . import backup
+    if backup.copy_dir():
+        last = backup.last_copy()
+        if last and not last["ok"]:
+            out.append(f"Копия резервного архива на «{last['target']}» не записана: {last['error']}")
+        elif last and last.get("same_disk"):
+            out.append(f"Копия резервного архива лежит на том же диске, что и система ({last['target']}) — "
+                       "при отказе диска пропадут обе; укажите папку на другом диске или в сети")
     return out

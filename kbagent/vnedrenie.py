@@ -96,6 +96,24 @@ def check_folder(path: str) -> tuple[bool, str]:
     return True, f"папка доступна, документов (PDF, DOCX, Excel, сканы): {n}"
 
 
+def check_backup_copy(path: str) -> tuple[bool, str]:
+    """Папка для копии архивов: доступна ли на запись и не на том ли она диске, что система."""
+    from .backup import same_disk
+    if not path:
+        return False, "папка не задана"
+    folder = Path(path)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / ".kbagent_write_test"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+    except OSError as e:
+        return False, f"в папку «{path}» нельзя записать: {e}"
+    if same_disk(folder):
+        return False, "папка на том же диске, что и система — при отказе диска пропадут и архивы, и копии"
+    return True, "папка доступна на запись, диск — другой"
+
+
 def check_mail() -> tuple[bool, str]:
     import imaplib
     from . import mailbox
@@ -230,9 +248,18 @@ def steps(models_ok: bool | None = None, registered: dict[str, bool] | None = No
         out.append(Step("jobs", "Задачи по расписанию", not missing, "все настроенные — в Планировщике" if not missing
                         else "нет в Планировщике: " + ", ".join(missing), "scripts\\install_tasks.bat"))
     backup = next(r for r in rows if r["key"] == "backup")
+    from .backup import copy_dir, last_copy
+    copied = last_copy() if copy_dir() else None
     out.append(Step("backup", "Резервная копия", backup["state"] == "ok",
-                    f"последняя — {jobs.ago(backup['age'])}", "«Система» → «Создать резервную копию»; дальше — "
-                    "каждый день по расписанию"))
+                    f"последняя — {jobs.ago(backup['age'])}" + (
+                        "; копия на другом диске — " + ("проверена" if copied["ok"] else "не записана")
+                        if copied else ""), "«Система» → «Создать резервную копию»; дальше — каждый день по расписанию"))
+    out.append(Step("backup_copy", "Копия архивов на другом диске", bool(copied and copied["ok"]
+                                                                          and not copied.get("same_disk")),
+                    ("последняя — " + copied["time"][:16] + (", проверена" if copied["ok"] else f": {copied['error']}"))
+                    if copied else ("папка задана, копий ещё не было" if copy_dir() else
+                                    "не задана — при отказе диска сервера пропадут и система, и её архивы"),
+                    "«Подключения» ниже → «Копия резервных архивов на другом диске»"))
     results = ROOT / "eval" / "results"
     runs = sorted([*results.glob("partner*.md"), *results.glob("priemka*.md")], key=lambda p: p.stat().st_mtime)
     out.append(Step("quality", "Проверка на вопросах предприятия", bool(runs),

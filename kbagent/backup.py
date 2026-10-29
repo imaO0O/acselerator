@@ -13,6 +13,7 @@
 """
 import hashlib
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -132,3 +133,61 @@ def summary(manifest: dict) -> str:
     docs = ", ".join(f"{FOLDERS.get(k, k)} — {n}" for k, n in sorted(counts.items()))
     return (f"версия {manifest['version']}, создана {manifest['created']}: файлов — {len(manifest['files'])}"
             + (f"; документов: {docs}" if docs else ""))
+
+# ---------- копия на другом диске ----------
+# Архив в backups\ лежит на том же диске, что и система: при отказе диска пропадут оба. KB_BACKUP_COPY — папка на
+# другом диске или в сети: туда кладётся копия каждого архива и сразу проверяется по контрольным суммам на месте.
+
+def copy_dir() -> Path | None:
+    value = os.environ.get("KB_BACKUP_COPY", "").strip()
+    return Path(value) if value else None
+
+
+def same_disk(target: Path, root: Path = ROOT) -> bool:
+    """Копия на том же диске, что и система, от отказа диска не спасёт. Windows — по букве диска или сетевому
+    ресурсу (\\\\server\\share), Linux — по устройству файловой системы."""
+    t, r = target.resolve(), root.resolve()
+    if t.drive or r.drive:
+        return t.drive.lower() == r.drive.lower()
+    while not t.exists() and t != t.parent:
+        t = t.parent
+    try:
+        return os.stat(t).st_dev == os.stat(r).st_dev
+    except OSError:
+        return False
+
+
+def _copy_state() -> Path:
+    from .config import settings
+    return settings.log_dir / "backup_copy.json"
+
+
+def last_copy() -> dict | None:
+    try:
+        return json.loads(_copy_state().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def copy_to(archive: Path, target: Path | None = None, keep: int = 10) -> dict:
+    """Копия архива в папку на другом диске; проверяется по контрольным суммам уже там. Итог — в журнал копий."""
+    target = target or copy_dir()
+    result = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "target": str(target or ""), "archive": archive.name,
+              "ok": False, "error": ""}
+    try:
+        if target is None:
+            raise ValueError("папка для копии не задана (KB_BACKUP_COPY)")
+        target.mkdir(parents=True, exist_ok=True)
+        dest = target / archive.name
+        tmp = dest.with_suffix(".tmp")
+        shutil.copyfile(archive, tmp)
+        verify(tmp)                                  # прочитана с того диска — значит, записалась целиком
+        tmp.replace(dest)
+        for old in sorted(target.glob("agent_backup_*.zip"))[:-keep] if keep else []:
+            old.unlink()
+        result.update(ok=True, path=str(dest), same_disk=same_disk(target))
+    except (OSError, ValueError, zipfile.BadZipFile, KeyError) as e:
+        result["error"] = f"{type(e).__name__}: {e}"[:300]
+    _copy_state().parent.mkdir(parents=True, exist_ok=True)
+    _copy_state().write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    return result

@@ -75,3 +75,34 @@ def test_only_last_backups_are_kept_and_running_services_detected(tmp_path):
         srv.listen()
         port = srv.getsockname()[1]
         assert backup.running({port: "чат"}) == [f"чат (порт {port})"]
+
+
+def test_copy_to_another_disk_is_verified_there(tmp_path, tmp_settings, monkeypatch):
+    from kbagent import backup, jobs
+    root = tmp_path / "agent"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "users.yaml").write_text("users: []\n", encoding="utf-8")
+    archive = backup.create(root=root)
+    target = tmp_path / "копии"
+    rep = backup.copy_to(archive, target)
+    assert rep["ok"] and (target / archive.name).exists() and backup.verify(target / archive.name)
+    assert backup.last_copy()["ok"] and rep["same_disk"]          # во временной папке — тот же диск
+    monkeypatch.setenv("KB_BACKUP_COPY", str(target))
+    assert any("том же диске" in w for w in jobs.warnings([]))
+    # испорченная копия не остаётся под именем архива
+    monkeypatch.setattr(backup, "verify", lambda p: (_ for _ in ()).throw(ValueError("контрольная сумма")))
+    bad = backup.copy_to(archive, tmp_path / "другая")
+    assert not bad["ok"] and "контрольная сумма" in bad["error"] and not (tmp_path / "другая" / archive.name).exists()
+    assert any("не записана" in w for w in jobs.warnings([]))
+
+
+def test_same_disk_by_drive_letter_and_network_share(tmp_path):
+    import sys
+    from pathlib import Path
+    from kbagent import backup
+    if sys.platform == "win32":
+        root = Path("C:/agent")
+        assert backup.same_disk(Path("C:/backups"), root) and not backup.same_disk(Path("E:/backups"), root)
+        assert not backup.same_disk(Path("//backup-server/agent"), root)
+    else:
+        assert backup.same_disk(tmp_path / "x", tmp_path)

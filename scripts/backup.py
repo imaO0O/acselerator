@@ -29,6 +29,12 @@ def main() -> int:
     if args.cmd == "create":
         path = backup.create(out_dir=args.to)
         print(f"Архив: {path}\n{backup.summary(backup.verify(path))}")
+        if backup.copy_dir():                        # копия на другом диске (KB_BACKUP_COPY)
+            rep = backup.copy_to(path)
+            if not rep["ok"]:
+                print(f"Копия на «{rep['target']}» не записана: {rep['error']}")
+                return 1
+            print(f"Копия: {rep['path']} — проверена" + (" (тот же диск, что и система!)" if rep["same_disk"] else ""))
         return 0
     if args.cmd == "verify":
         try:

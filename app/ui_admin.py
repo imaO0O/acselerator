@@ -764,6 +764,15 @@ def connections() -> None:
                 else:
                     _saved("mail", {"KB_MAIL_HOST": host, "KB_MAIL_PORT": port, "KB_MAIL_USER": user,
                                     "KB_MAIL_FOLDER": folder or "INBOX"}, password, vnedrenie.check_mail)
+    with st.expander("Копия резервных архивов на другом диске", icon=":material/backup:", expanded=False):
+        st.caption("Архив в папке backups лежит на том же диске, что и система: при отказе диска пропадут оба. Сюда "
+                   "кладётся копия каждого архива и сразу проверяется по контрольным суммам.")
+        with st.form("conn-backup"):
+            target = st.text_input("Папка на другом диске или в сети", value=vnedrenie.current("KB_BACKUP_COPY"),
+                                   placeholder=r"\\backup-server\agent или E:\agent_backups")
+            if st.form_submit_button("Сохранить и проверить", type="primary"):
+                target = target.strip()
+                _saved("backup", {"KB_BACKUP_COPY": target}, "", lambda: vnedrenie.check_backup_copy(target))
     with st.expander("Цены и остатки из 1С", icon=":material/sync:", expanded=False):
         st.caption("Стандартный интерфейс OData, только чтение — в 1С ничего не меняется. Что включить в 1С — "
                    "docs/vnedrenie.md, «Цены и остатки из 1С». Для ИБ — отдельный пользователь с правом только на "
@@ -817,6 +826,11 @@ def system() -> None:
                 path = backup.create()
             log_action("backup", ctx()["login"], path.name, backup.summary(backup.verify(path)))
             st.session_state.backup_path = str(path)
+            if backup.copy_dir():
+                rep = backup.copy_to(path)
+                (st.success if rep["ok"] else st.error)(
+                    f"Копия на «{rep['target']}» — проверена" if rep["ok"] else
+                    f"Копия на «{rep['target']}» не записана: {rep['error']}")
         if st.session_state.get("backup_path") and Path(st.session_state.backup_path).exists():
             path = Path(st.session_state.backup_path)
             st.success(f"Готово: {path.name}")
