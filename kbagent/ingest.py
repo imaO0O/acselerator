@@ -302,11 +302,12 @@ def load_catalog(raw_dir: Path) -> dict[str, dict]:
         if path.exists():
             for d in yaml.safe_load(path.read_text(encoding="utf-8"))["documents"]:
                 catalog[d["id"]] = d
-    # новая редакция, загруженная с пометкой «заменяет X», отменяет X — только после утверждения:
-    # черновик с ошибкой не должен подменять действующий регламент для всех сотрудников
+    # новая редакция, загруженная с пометкой «заменяет X», отменяет X — только после утверждения
+    # (черновик с ошибкой не должен подменять действующий регламент) и с даты вступления в силу: до неё
+    # действует прежняя, иначе между утверждением и этой датой сотрудники не видели бы ни одной
     for d in list(catalog.values()):
         old = catalog.get(d.get("replaces"))
-        if old is not None and not is_cancelled(d) and not is_draft_edition(d):
+        if old is not None and not is_cancelled(d) and not is_draft_edition(d) and not not_yet_effective(d):
             old.update(status="отменён", replaced_by=d["id"])
     return catalog
 
@@ -344,6 +345,12 @@ def registry_info(doc_id: str, raw_dir: Path | None = None) -> dict:
     if _REGISTRY.get("stamp") != stamp:
         _REGISTRY.update(stamp=stamp, catalog=load_catalog(raw_dir))
     return _REGISTRY["catalog"].get(doc_id, {})
+
+
+def registry(raw_dir: Path | None = None) -> dict[str, dict]:
+    """Весь реестр (каталог) — тот же кэш, что у registry_info."""
+    registry_info("", raw_dir)
+    return _REGISTRY["catalog"]
 
 
 def registry_suffix(doc_id: str, raw_dir: Path | None = None) -> str:

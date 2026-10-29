@@ -21,8 +21,10 @@ from pathlib import Path
 
 import yaml
 
+from . import changes
 from .actions import log_action
 from .config import settings
+from .editions import chunk_clauses, compare, compare_clauses
 from .ingest import ARCHIVE, access_of, expired_on, is_draft_edition, load_catalog, not_yet_effective, ocr_available
 from .text import tokenize
 from .store import Index
@@ -203,6 +205,7 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
     path.write_bytes(data)
     title = guess_title(path) or title       # «РИ ДП-05-2026 «Обслуживание…»», а не имя файла латиницей
 
+    old_clauses = chunk_clauses([c for c in index.chunks if c.doc_id == doc_id]) if replaced_same else []
     entry = {"id": doc_id, "title": title, "kind": KIND_PENDING, "access": access,
              "uploaded_by": user, "uploaded_at": time.strftime("%Y-%m-%d %H:%M"), "approved": False}
     if replaces and replaces != doc_id:
@@ -216,6 +219,11 @@ def add_upload(index: Index, filename: str, data: bytes, access: str = "all", us
                                 progress=progress, stats=stats)
     if replaces:
         _sync_access(index, replaces)
+    elif replaced_same:          # тот же файл загружен заново — что изменилось, видно по прежним фрагментам
+        changes.record("updated", doc_id, title, access, user,
+                       cmp=compare_clauses(old_clauses, chunk_clauses(chunks)))
+    else:                        # новая редакция — сотрудникам сообщается при утверждении, новый документ — сразу
+        changes.record("added", doc_id, title, access, user)
     log_action("upload", user, title, f"фрагментов: {len(chunks)}; доступ: {access}"
                + (f"; заменяет: {replaces}" if replaces else "") + (f"; распознано страниц: {stats['ocr_pages']}"
                                                                      if stats.get("ocr_pages") else ""))
@@ -236,6 +244,15 @@ def approve_upload(index: Index, doc_id: str, user: str | None = None) -> None:
     replaced = next((d.get("replaces") for d in docs if d["id"] == doc_id), None)
     if replaced:
         _sync_access(index, replaced)
+        info = load_catalog(settings.raw_dir).get(doc_id, {})
+        if not not_yet_effective(info):     # вступает в силу позже — сообщение появится в тот день (changes.dated)
+            old = load_catalog(settings.raw_dir).get(replaced, {})
+            try:
+                cmp = compare(replaced, doc_id)
+            except Exception:  # noqa: BLE001 — сравнение не должно мешать утверждению
+                cmp = None
+            changes.record("edition", doc_id, info.get("title", doc_id), info.get("access", "all"), user,
+                           old_id=replaced, old_title=old.get("title", replaced), cmp=cmp)
     log_action("approve", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id),
                f"прежняя редакция отменена: {replaced}" if replaced else "")
 
@@ -262,6 +279,9 @@ def remove_upload(index: Index, doc_id: str, user: str | None = None) -> None:
     docs = _read_catalog()
     log_action("remove", user, next((d["title"] for d in docs if d["id"] == doc_id), doc_id))
     replaced = next((d.get("replaces") for d in docs if d["id"] == doc_id), None)
+    entry = next((d for d in docs if d["id"] == doc_id), None)
+    if entry is not None and not is_draft_edition(entry):     # неутверждённый проект редакции никто не видел
+        changes.record("removed", doc_id, entry.get("title", doc_id), entry.get("access", "all"), user)
     _write_catalog([d for d in docs if d["id"] != doc_id])
     index.remove_document(doc_id, settings.index_dir)
     for p in UPLOAD_DIR.glob(f"{doc_id}.*"):

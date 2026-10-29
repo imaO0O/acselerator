@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.ui_common import (APP_NAME, BADGES, LOGO, ROUTE_LABELS, USER_AVATAR, ctx, file_bytes, get_agent,
                            health, inject_css, page_png)
-from kbagent import auth, effect, experts, prajs, tkp, tkp_registry
+from kbagent import auth, changes, effect, experts, prajs, spravochnik, tkp, tkp_registry, voice
 from kbagent.config import settings
 from kbagent.database import column_label, display
 from kbagent.actions import log_action
@@ -380,6 +380,12 @@ def render_answer(item: dict, i: int) -> None:
                           for d, day in expired.items())
         st.warning(f"Срок действия документа истёк: {names}. Проверьте, какая редакция действует сейчас, "
                    "и сообщите администратору базы знаний.", icon=":material/event_busy:")
+    if reasons := changes.stale(item):
+        st.warning("После этого ответа изменился источник: " + "; ".join(reasons) + ". Переспросите — ответ будет "
+                   "по действующей редакции.", icon=":material/update:")
+        if item["route"] in ("documents", "both"):
+            st.button("Переспросить", key=f"reask-{uid}", icon=":material/refresh:", on_click=_ask,
+                      args=(item["question"],))
     if any(s.get("doc_kind") == KIND_PENDING for s in cited):
         st.warning("Ответ опирается на документ, загруженный пользователем и ещё не утверждённый.",
                    icon=":material/pending:")
@@ -481,7 +487,9 @@ def _hero() -> None:
                 "на документ, пункт и страницу. Подбираю приборы по требованиям клиента, по письму клиента готовлю "
                 "черновик ТКП — утверждаете вы. Если ответа в источниках нет, так и скажу.")
     st.caption("Скрепка в поле ввода: письмо клиента (Word, PDF, текст, .eml) — подготовлю черновик ТКП; приказ "
-               "или служебная записка в Word — проверю оформление по ГОСТ Р 7.0.97.")
+               "или служебная записка в Word — проверю оформление по ГОСТ Р 7.0.97."
+               + (" Микрофон — вопрос голосом: речь распознаётся на этом компьютере, запись не сохраняется."
+                  if voice.available() else ""))
     if ctx()["role"] not in EXAMPLES:          # запросы клиентов: главный сценарий — письмо → ТКП
         if st.button("Пример: письмо клиента → черновик ТКП", icon=":material/request_quote:", type="primary"):
             st.session_state.pending = TKP_EXAMPLE
@@ -500,6 +508,7 @@ def result_item(question: str, r, role: str) -> dict:
             "status": r.status, "text": r.text, "sources": r.sources, "sql": r.sql, "columns": r.columns,
             "labels": r.labels, "rows": r.rows, "seconds": r.seconds, "options": r.options,
             "expert_ids": list(r.stats.get("expert_ids", [])), "tkp": r.stats.get("tkp"),
+            "as_of": r.stats.get("as_of"),
             "baseline": (get_agent().search_baseline(r.asked or question, role)
                          if r.status == "answer" and r.route not in ("help", "normo") else None),
             "ts": time.time(), "at": time.strftime("%d.%m.%Y %H:%M")}
@@ -516,6 +525,56 @@ def open_in_chat(question: str, r, role: str, **extra) -> None:
     st.session_state.conv = conv
 
 
+CHANGE_ICONS = {"edition": ":material/published_with_changes:", "added": ":material/note_add:",
+                "updated": ":material/edit_document:", "removed": ":material/delete:",
+                "effective": ":material/event_available:", "expired": ":material/event_busy:"}
+CLAUSE_KINDS = {"changed": "изменён", "added": "добавлен", "removed": "исключён"}
+
+
+def _ask(question: str, seen: bool = False) -> None:
+    if seen:
+        changes.mark_seen(ctx()["login"])
+    st.session_state.pending = question
+
+
+def _change(e: dict) -> None:
+    text = f"{CHANGE_ICONS[e['kind']]} **{changes.KINDS[e['kind']]}:** «{e['title']}»"
+    if e.get("old_title"):
+        text += f" вместо «{e['old_title']}»"
+    st.markdown(text + (f" — {e['summary']}" if e.get("summary") else "") + f"  \n:gray[{display(e['time'])[:10]}]")
+    if e["kind"] == "edition":
+        st.button("Что изменилось", key=f"chg-{e['id']}", icon=":material/difference:", on_click=_ask,
+                  args=(f"Что изменилось в {e['title']}?", True))
+    elif e["kind"] in ("added", "effective"):
+        st.button("О чём документ", key=f"chg-{e['id']}", icon=":material/description:", on_click=_ask,
+                  args=(f"О чём документ «{e['title']}»?", True))
+    elif e.get("changes"):
+        with st.expander("Что изменилось"):
+            for c in e["changes"]:
+                st.markdown(f"**п. {c['number']}** — {CLAUSE_KINDS[c['kind']]}: {c['text']}")
+
+
+def notices() -> None:
+    """Изменения документов, доступных роли, с прошлого раза — сотрудник узнаёт о новой редакции, не спрашивая."""
+    events = changes.feed(ctx()["login"], ctx()["role"])
+    if not events:
+        return
+    convs = [c for c in (auth.load_conversation(_key(), x["id"]) for x in auth.list_conversations(_key())[:30]) if c]
+    affected = sum(changes.affected_answers(convs, events).values())
+    with st.container(border=True, key="doc-changes"):
+        st.markdown(f"**Изменения в документах** · {len(events)}")
+        for e in events[:3]:
+            _change(e)
+        if len(events) > 3:
+            with st.expander(f"Ещё изменений: {len(events) - 3}"):
+                for e in events[3:]:
+                    _change(e)
+        if affected:
+            st.caption(f"Ответов в ваших диалогах по прежним версиям: {affected} — они помечены, их стоит переспросить.")
+        st.button("Понятно", key="chg-seen", icon=":material/done_all:", on_click=changes.mark_seen,
+                  args=(ctx()["login"],))
+
+
 def chat_page() -> None:
     inject_css(CHAT_CSS)
     if st.query_params.get("show") == "1":      # ссылка для записи экрана: сразу в режиме показа
@@ -525,20 +584,36 @@ def chat_page() -> None:
     items = conv["items"]
 
     sent = st.chat_input("Спросите о продукции, документах или учёте; вставьте или приложите письмо клиента — "
-                         "подготовлю ТКП", accept_file=True, file_type=tkp.LETTER_TYPES)
+                         "подготовлю ТКП", accept_file=True, file_type=tkp.LETTER_TYPES,
+                         accept_audio=voice.available(), audio_sample_rate=16000)
     attached = sent.files[0] if sent and sent.files else None
     question = (sent.text if sent else None) or st.session_state.pop("pending", None)
+    spoken = getattr(sent, "audio", None) if sent and not (sent.text or "").strip() and not attached else None
+    if spoken is not None:
+        # голосовой вопрос: распознаётся здесь же; обозначения моделей — как в справочнике параметров
+        try:
+            with st.spinner("Распознаю вопрос…"):
+                question = voice.transcribe(spoken.getvalue(), {v.model for v in spravochnik.load()[0]})
+        except voice.VoiceError as e:
+            st.warning(f"Не получилось распознать: {e}.", icon=":material/mic_off:")
+            question = None
+        if spoken is not None and question == "":
+            st.warning("Вопрос не расслышан — повторите ближе к микрофону или напишите его.", icon=":material/mic_off:")
+            question = None
     typed = (question or "").strip()
     if attached is not None:
         question = f"{typed or 'Приложенный файл'} · {attached.name}"
     if question and items and items[-1]["question"] == question and time.time() - items[-1].get("ts", 0) < 10:
         question = None          # двойное нажатие — тот же вопрос только что задан
 
+    notices()
     if not items and not question:
         _hero()
     for i, item in enumerate(items):
         with st.chat_message("user", avatar=USER_AVATAR):
             st.markdown(md_plain(item["question"]))
+            if item.get("voice"):
+                st.caption(":material/mic: голосом")
         with st.chat_message("assistant", avatar=LOGO):
             render_answer(item, i)
 
@@ -546,6 +621,8 @@ def chat_page() -> None:
         return
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(md_plain(question))
+        if spoken is not None:
+            st.caption(":material/mic: голосом — так я понял вопрос")
     with st.chat_message("assistant", avatar=LOGO):
         if attached is None and not health()["llm"]:      # нормоконтролю и ТКП модель не нужна
             st.error("Сервис ответов временно недоступен. Попробуйте через минуту или сообщите администратору.",
@@ -564,6 +641,8 @@ def chat_page() -> None:
                                     user=ctx()["login"], on_step=lambda msg: status.update(label=msg))
         holder.empty()                 # этапы нужны, пока идёт ответ; после — не загромождают диалог
         item = result_item(question, r, ctx()["role"])
+        if spoken is not None:
+            item["voice"] = True
         items.append(item)
         _save()
         if len(items) == 1:

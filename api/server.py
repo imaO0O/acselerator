@@ -15,13 +15,13 @@ import time
 from pathlib import Path
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from kbagent import demand, llm, tkp  # noqa: E402
+from kbagent import changes, demand, llm, tkp  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.agent import Agent  # noqa: E402
 from kbagent.config import settings  # noqa: E402
@@ -141,6 +141,27 @@ class TkpResponse(BaseModel):
     letter_draft: str = Field("", description="черновик письма клиенту")
     docx_base64: str | None = None
     seconds: float
+
+
+class Change(BaseModel):
+    time: str
+    kind: str = Field(description="edition — новая редакция, added, updated, removed, effective, expired")
+    kind_label: str
+    doc_id: str
+    title: str
+    old_title: str | None = Field(None, description="прежняя редакция")
+    summary: str = Field("", description="итог сравнения: «пунктов изменено: 3, добавлено: 1»")
+
+
+@app.get("/changes", response_model=list[Change])
+def doc_changes(since: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$",
+                                   description="с какого момента: 2026-10-28 или 2026-10-28 09:00"),
+                who: dict = Depends(client)) -> list[Change]:
+    """Изменения документов, доступных роли ключа, — чтобы бот мессенджера публиковал их в канале отдела."""
+    stamp = (since + " 00:00:00")[:19] if len(since) == 10 else (since + ":00")[:19]
+    events = changes.feed(f"api:{who['name']}", who["role"], since=stamp)
+    return [Change(time=e["time"], kind=e["kind"], kind_label=changes.KINDS[e["kind"]], doc_id=e["doc_id"],
+                   title=e["title"], old_title=e.get("old_title"), summary=e.get("summary", "")) for e in events]
 
 
 @app.get("/health")

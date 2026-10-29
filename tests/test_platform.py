@@ -71,6 +71,15 @@ def test_api_requires_key(tmp_path, monkeypatch, tmp_settings):
     assert api.post("/ask", json={"question": "тест вопроса"}).status_code == 401
     assert api.post("/ask", json={"question": "тест вопроса"}, headers={"X-API-Key": "bad"}).status_code == 401
     assert server.client("kb_good")["role"] == "Метролог"
+    # изменения документов — по роли ключа: метрологу видна новая РИ метрологии, но не документ администратора
+    from kbagent import changes
+    changes.record("added", "ri04", "РИ ДП-04", "metrology", "admin")
+    changes.record("added", "secret", "Приказ", "admin", "admin")
+    import time
+    got = api.get("/changes", params={"since": time.strftime("%Y-%m-%d")}, headers={"X-API-Key": "kb_good"})
+    assert got.status_code == 200 and [c["title"] for c in got.json()] == ["РИ ДП-04"]
+    assert got.json()[0]["kind_label"] == "Новый документ"
+    assert api.get("/changes", params={"since": "вчера"}, headers={"X-API-Key": "kb_good"}).status_code == 422
 
 
 def test_named_documents_and_rule_routing():

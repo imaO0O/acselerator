@@ -3,6 +3,7 @@
     python scripts/setup.py          # компьютер с видеокартой NVIDIA (CUDA 13)
     python scripts/setup.py --cpu    # ноутбук без видеокарты NVIDIA
     python scripts/setup.py --ocr    # только языки распознавания сканов (около 6 МБ)
+    python scripts/setup.py --voice  # только модель распознавания речи GigaAM (около 215 МБ)
 
 Файлы качаются в несколько потоков (scripts/pget.py) с докачкой: если
 загрузка прервалась, просто запустите команду ещё раз.
@@ -14,6 +15,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 MODELS = ROOT / "models"
 TOOLS = ROOT / "tools"
 PGET = Path(__file__).with_name("pget.py")
@@ -48,11 +50,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cpu", action="store_true", help="сборка llama.cpp для процессора")
     ap.add_argument("--ocr", action="store_true", help="скачать только языки распознавания сканов")
+    ap.add_argument("--voice", action="store_true", help="скачать только модель распознавания речи")
     args = ap.parse_args()
 
     for name in TESSDATA_FILES:
         fetch(f"{TESSDATA_URL}/{name}", TOOLS / "tessdata" / name)
     if args.ocr:
+        return
+    # голосовой вопрос: GigaAM v3 (Сбер, MIT) в ONNX — работает на процессоре, без отдельного сервера
+    from kbagent import voice
+    for url, target in voice.setup_files():
+        fetch(url, target)
+    if args.voice:
         return
 
     archives = ([f"llama-{LLAMA_BUILD}-bin-win-cpu-x64.zip"] if args.cpu else

@@ -768,6 +768,10 @@ def system() -> None:
     state = health()
     for key, name in names.items():
         st.markdown(f"{':green[● работает]' if state[key] else ':red[● не отвечает]'} — {name}")
+    from kbagent import voice
+    st.markdown((":green[● работает]" if voice.available() else ":gray[○ не установлено]")
+                + " — Распознавание речи для голосовых вопросов (GigaAM v3, на процессоре)"
+                + ("" if voice.available() else ": python scripts\\setup.py --voice, около 215 МБ"))
     if not all(state.values()):
         st.warning("Запустите серверы моделей: scripts\\start_servers.bat (на компьютере с видеокартой) "
                    "или scripts\\start_servers.bat -Cpu.")

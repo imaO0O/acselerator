@@ -91,7 +91,27 @@ def word_diff(old: str, new: str) -> str:
 
 def compare(old_id: str, new_id: str, catalog: dict | None = None) -> Comparison:
     catalog = catalog if catalog is not None else load_catalog(settings.raw_dir)
-    old, new = clauses(old_id), clauses(new_id)
+    result = compare_clauses(clauses(old_id), clauses(new_id))
+    result.old_id, result.new_id = old_id, new_id
+    result.old_title = catalog.get(old_id, {}).get("title", old_id)
+    result.new_title = catalog.get(new_id, {}).get("title", new_id)
+    return result
+
+
+def chunk_clauses(chunks) -> list[Clause]:
+    """Пункты документа из фрагментов индекса (длинный пункт разбит на части — склеивается обратно): так можно
+    сравнить файл, обновлённый на месте, — прежнего файла уже нет, а его фрагменты ещё в индексе."""
+    out: list[Clause] = []
+    for c in chunks:
+        number = c.clause or ""
+        if out and out[-1].number == number:
+            out[-1].text += " " + c.text
+        else:
+            out.append(Clause(number, c.text, c.page_start))
+    return [c for c in out if c.number]
+
+
+def compare_clauses(old: list[Clause], new: list[Clause]) -> Comparison:
     words_old = [set(tokenize(_body(c.text))) for c in old]
     words_new = [set(tokenize(_body(c.text))) for c in new]
     pairs = sorted(((_similarity(wo, wn), i, j) for i, wo in enumerate(words_old) for j, wn in enumerate(words_new)),
@@ -104,8 +124,7 @@ def compare(old_id: str, new_id: str, catalog: dict | None = None) -> Comparison
             matched_old.add(i)
             matched_new.add(j)
             match[j] = i
-    result = Comparison(old_id, new_id, catalog.get(old_id, {}).get("title", old_id),
-                        catalog.get(new_id, {}).get("title", new_id))
+    result = Comparison("", "", "", "")
     for j, c in enumerate(new):                    # порядок — как в новой редакции
         if j not in match:
             result.changes.append(Change("added", new=c))

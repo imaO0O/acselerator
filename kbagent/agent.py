@@ -8,12 +8,13 @@ from typing import Callable
 
 import yaml
 
-from . import demand, demo_db, llm, raschety, spravochnik, tkp
+from . import asof, demand, demo_db, llm, raschety, spravochnik, tkp
 from .answer import answer_from_documents, source_label
 from .cards import build_cards, card_chunk, card_text
 from .config import settings
 from .database import answer_from_database
 from .editions import compare, edition_pairs
+from .ingest import ARCHIVE, DRAFT, registry
 from .normocontrol import GOST_ID, check_docx
 from .privacy import mask, prune
 from .retriever import Hit, Retrieval, retrieve
@@ -310,6 +311,16 @@ def _sources(a) -> list[dict]:
             for n, h in enumerate(a.hits, 1)]
 
 
+def scoped(index: Index, question: str, allowed: set[str], only: set[str] | None, scope: set[str] | None) -> Retrieval:
+    """Поиск; scope — только эти документы (ответ на дату: действовавшие тогда редакции), даже если вопрос
+    называет документ: названный ищется среди них."""
+    if scope is not None:
+        only = (only & scope) or scope if only else scope
+        if not only:
+            return Retrieval(hits=[], best_score=0.0, confident=False, scored_by="none")
+    return retrieve(index, question, allowed, only or None)
+
+
 class Agent:
     def __init__(self, index: Index | None = None):
         self.index = index or Index.load(settings.index_dir)
@@ -332,6 +343,16 @@ class Agent:
             if want != access:
                 self.index.update_meta(doc_id, settings.index_dir, access=want)
         self._synced = today
+
+    def as_of(self, question: str, allowed: set[str]) -> tuple[asof.Window | None, set[str] | None, set[str]]:
+        """Прошедшая дата в вопросе → окно, документы, действовавшие тогда, и группы доступа для поиска: отменённые
+        редакции в индексе закрыты для всех ролей, поэтому к группам роли добавляется «архив», а отбор по датам и
+        по исходной группе документа делает scope."""
+        window = asof.parse(question)
+        if window is None:
+            return None, None, allowed
+        docs = asof.scope(window, allowed, {c.doc_id for c in self.index.chunks}, registry())
+        return window, docs, allowed | {ARCHIVE, DRAFT}
 
     # ---------- документы целиком ----------
 
@@ -888,25 +909,30 @@ class Agent:
             # вопрос называет документ («по ГОСТ 7.0.97», «у MAS830L») — сначала ищем в нём:
             # иначе «поля документа» находятся в другом стандарте
             docs = named_docs(asked, self.cards)
-            retrieval = retrieve(self.index, asked, allowed, docs or None)
+            # «какой срок действовал на 01.03.2025?» — только редакции, действовавшие тогда
+            window, scope, search_allowed = self.as_of(asked, allowed)
+            if window:
+                step(f"Ищу в редакциях, действовавших {window.label}…")
+            find = lambda q, only=None: scoped(self.index, q, search_allowed, only, scope)  # noqa: E731
+            retrieval = find(asked, docs)
             if docs and not retrieval.confident:
-                retrieval = retrieve(self.index, asked, allowed)
+                retrieval = find(asked)
             if summary:
                 # и с состоянием записи: «партия П-2609-04» сама по себе не похожа на «ЭРИ, не прошедшие
                 # входной контроль», а «ЭРИ, карантин» — похожа; но длинное описание записи может перебить
                 # сам вопрос («кому звонить ночью»), поэтому найденное по обоим запросам объединяется
-                merge(retrieval, retrieve(self.index, f"{asked} {summary}", allowed), limit=3)
+                merge(retrieval, find(f"{asked} {summary}"), limit=3)
             if asked != base and history:
                 # уточнение в диалоге: ищем и вместе с темой предыдущего вопроса («отказ категории Б» +
                 # «ночная смена» → раздел о ночной смене), добавляем до двух новых фрагментов
-                extra = retrieve(self.index, f"{asked} {history[-1]['question']}", allowed)
+                extra = find(f"{asked} {history[-1]['question']}")
                 seen = {h.chunk.id for h in retrieval.hits}
                 retrieval.hits += [h for h in extra.hits if not h.neighbor and h.chunk.id not in seen][:2]
             if len(parts) > 1:
                 # составной вопрос («чем отличаются категории и как быстро реагируют») — ищем по каждой части,
                 # иначе поиск находит пункты только про одну из них
                 for part in parts:
-                    merge(retrieval, retrieve(self.index, part, allowed), limit=2)
+                    merge(retrieval, find(part), limit=2)
             prev_docs = set((history or [{}])[-1].get("docs") or [])
             if (asked != base and history and not retrieval.confident and retrieval.hits
                     and retrieval.hits[0].chunk.doc_id in prev_docs
@@ -930,6 +956,12 @@ class Agent:
                      if retrieval.confident else "Подходящих фрагментов в документах нет")
                 a = answer_from_documents(asked, retrieval, facts=facts, parts=parts)
                 result = AgentResult(question, role, route, a.status, a.text, sources=_sources(a), stats=a.stats)
+                if window:
+                    result.stats["as_of"] = window.label
+                    cited = [s["doc_id"] for s in result.sources if s["cited"]]
+                    lead = asof.note(window, cited, registry()) if a.answered else (
+                        f"Документов, действовавших {window.label}, по этому вопросу в базе нет." if not scope else "")
+                    result.text = f"{lead}\n\n{result.text}" if lead else result.text
                 if route == "both":
                     if a.answered and facts:
                         result.text = f"**По учётной базе**\n\n{db_result.text}\n\n**По документам**\n\n{a.text}"
