@@ -18,7 +18,7 @@ from app.ui_admin import admin_page  # noqa: E402
 from app.ui_chat import chat_page  # noqa: E402
 from app.ui_common import APP_NAME, LOGO, inject_css  # noqa: E402
 from app.ui_tkp import registry_page  # noqa: E402
-from kbagent import auth  # noqa: E402
+from kbagent import auth, users  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
@@ -37,7 +37,15 @@ def set_cookie(value: str, max_age: int) -> None:
 
 def current_user() -> dict | None:
     if "user" in st.session_state:
-        return st.session_state.user
+        # роль и блокировка проверяются при каждом обновлении: заблокированного выкидывает сразу, а не через 12 часов
+        fresh = auth.session_user(st.session_state.get("token"))
+        if fresh is None:
+            for k in ("user", "token", "conv", "ctx"):
+                st.session_state.pop(k, None)
+            st.session_state.update(logged_out=True, clear_cookie=True)
+            return None
+        st.session_state.user = fresh
+        return fresh
     if not st.session_state.get("logged_out"):
         token = st.context.cookies.get(COOKIE)
         user = auth.session_user(token)
@@ -78,10 +86,36 @@ def login_page() -> None:
     st.stop()
 
 
+def password_form(login: str, first: bool) -> None:
+    """Смена пароля: при первом входе с временным паролем — обязательно, потом — по кнопке в боковой панели."""
+    with st.form(f"pwd-{login}-{'first' if first else 'side'}"):
+        old = st.text_input("Текущий (временный) пароль" if first else "Текущий пароль", type="password")
+        new = st.text_input(f"Новый пароль — не короче {users.MIN_LENGTH} символов, буквы и цифры", type="password")
+        again = st.text_input("Новый пароль ещё раз", type="password")
+        if st.form_submit_button("Сменить пароль", type="primary"):
+            if new != again:
+                st.error("Пароли не совпадают.")
+            else:
+                try:
+                    users.change_password(login, old, new)
+                    st.session_state.user["must_change"] = False
+                    st.success("Пароль сменён.")
+                    st.rerun()
+                except users.UserError as e:
+                    st.error(str(e)[:1].upper() + str(e)[1:] + ".")
+
+
 if settings.auth_required:
     user = current_user()
     if user is None:
         login_page()
+    if user.get("must_change"):
+        _, col, _ = st.columns([1, 1.3, 1])
+        with col:
+            st.markdown("### Задайте свой пароль")
+            st.caption("Вы вошли с временным паролем от администратора. Чтобы продолжить, задайте свой.")
+            password_form(user["login"], first=True)
+        st.stop()
     if token := st.session_state.pop("set_cookie", None):
         set_cookie(token, auth.SESSION_TTL)
     st.session_state.ctx = {"login": user["login"], "name": user["name"], "role": user["role"],
@@ -105,6 +139,9 @@ st.navigation(pages, position="sidebar" if len(pages) > 1 else "hidden").run()
 with st.sidebar:
     st.divider()
     st.markdown(f"**{ctx['name']}**  \n:gray[{ctx['role']}]")
+    if settings.auth_required:
+        with st.popover("Сменить пароль", icon=":material/key:"):
+            password_form(ctx["login"], first=False)
     if settings.auth_required and st.button("Выйти", icon=":material/logout:", key="logout", type="tertiary"):
         log_action("logout", ctx["login"])
         auth.end_session(st.session_state.get("token"))

@@ -1,7 +1,7 @@
 """Вход по логину и паролю, сеансы, история диалогов и оценки ответов — всё хранится на сервере.
 
-Пароли хранятся только в виде хэшей PBKDF2-SHA256 (data/users.yaml, создаётся
-scripts/make_users.py). В пилоте вход заменяется учётными записями предприятия
+Пароли хранятся только в виде хэшей PBKDF2-SHA256 (data/users.yaml; управление — kbagent/users.py,
+«Администрирование» → «Пользователи»; демо-учётки — scripts/make_users.py). В пилоте вход заменяется учётными записями предприятия
 (Active Directory / LDAP): роль берётся из группы пользователя, остальное не меняется.
 """
 import hashlib
@@ -91,9 +91,15 @@ def authenticate(login: str, password: str) -> dict | None:
     user = load_users().get(login)
     if not _DUMMY_HASH:
         _DUMMY_HASH.append(hash_password(secrets.token_hex(8)))
-    ok = verify_password(password, user["password_hash"] if user else _DUMMY_HASH[0]) and user is not None
+    ok = (verify_password(password, user["password_hash"] if user else _DUMMY_HASH[0]) and user is not None
+          and user.get("active", True))                      # заблокированный — как неверный пароль
     _register(login, ok)
-    return {"login": user["login"], "name": user["name"], "role": user["role"]} if ok else None
+    return _public(user) if ok else None
+
+
+def _public(user: dict) -> dict:
+    return {"login": user["login"], "name": user["name"], "role": user["role"],
+            "must_change": user.get("must_change", False)}
 
 
 # ---------- сеансы ----------
@@ -131,7 +137,13 @@ def session_user(token: str | None) -> dict | None:
     if not s or time.time() - s["created"] >= SESSION_TTL:
         return None
     u = load_users().get(s["login"])
-    return {"login": u["login"], "name": u["name"], "role": u["role"]} if u else None
+    return _public(u) if u and u.get("active", True) else None     # заблокирован или удалён — сеанс недействителен
+
+
+def end_user_sessions(login: str) -> None:
+    """Все сеансы пользователя — после блокировки или сброса пароля."""
+    sessions = {t: s for t, s in _read_sessions().items() if s["login"] != login}
+    _write_sessions(sessions)
 
 
 def end_session(token: str | None) -> None:

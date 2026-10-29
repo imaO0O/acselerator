@@ -736,15 +736,78 @@ def demand_tab() -> None:
             st.caption("Проигранных ТКП нет.")
 
 
+def users_tab() -> None:
+    """Учётные записи: создать, роль, блокировка, сброс пароля, удаление — временный пароль показывается один раз."""
+    from kbagent import users
+    st.caption("Новый пользователь и сброс пароля — временный пароль: передайте его лично; при первом входе "
+               "пользователь задаст свой. Заблокированный выходит из системы сразу. Действия — в журнале «Безопасность».")
+    if note := st.session_state.pop("users_note", None):
+        getattr(st, note[0])(note[1])
+    if temp := st.session_state.pop("users_temp", None):
+        st.success(f"Временный пароль для «{temp[0]}» — показывается один раз:")
+        st.code(temp[1], language=None)
+    people = users.listing()
+    if people:
+        st.dataframe(pd.DataFrame([{"Логин": u["login"], "Имя": u["name"], "Роль": u["role"],
+                                    "Статус": "заблокирован" if not u["active"] else (
+                                        "ждёт смены пароля" if u["must_change"] else "активен"),
+                                    "Создан": u.get("created", "—")} for u in people]),
+                     hide_index=True, width="stretch")
+    with st.form("user-add", clear_on_submit=True):
+        st.markdown("**Новый пользователь**")
+        c1, c2, c3 = st.columns(3)
+        login = c1.text_input("Логин", placeholder="ivanov")
+        name = c2.text_input("Имя", placeholder="Иванов И. И., инженер техпродаж")
+        role = c3.selectbox("Роль", list(settings.roles))
+        if st.form_submit_button("Создать", type="primary"):
+            try:
+                st.session_state.users_temp = (login.strip().lower(), users.add(login, name, role, ctx()["login"]))
+            except users.UserError as e:
+                st.session_state.users_note = ("error", str(e))
+            st.rerun()
+    if not people:
+        return
+    with st.container(border=True):
+        st.markdown("**Изменить пользователя**")
+        login = st.selectbox("Пользователь", [u["login"] for u in people], key="user-pick",
+                             format_func=lambda x: next(f"{u['login']} — {u['name']}" for u in people if u["login"] == x))
+        u = next(x for x in people if x["login"] == login)
+        c1, c2 = st.columns(2)
+        role = c1.selectbox("Роль", list(settings.roles), index=list(settings.roles).index(u["role"]),
+                            key=f"user-role-{login}")
+        active = c2.toggle("Доступ разрешён", value=u["active"], key=f"user-active-{login}")
+        b1, b2, b3 = st.columns(3)
+        try:
+            if b1.button("Сохранить", key=f"user-save-{login}", type="primary"):
+                users.update(login, ctx()["login"], role=role, active=active)
+                st.session_state.users_note = ("success", f"«{login}» сохранён.")
+                st.rerun()
+            if b2.button("Сбросить пароль", key=f"user-reset-{login}"):
+                st.session_state.users_temp = (login, users.reset_password(login, ctx()["login"]))
+                st.rerun()
+            sure = b3.checkbox("Удалить — подтверждаю", key=f"user-sure-{login}")
+            if sure and b3.button("Удалить", key=f"user-del-{login}"):
+                users.remove(login, ctx()["login"])
+                st.session_state.users_note = ("success", f"«{login}» удалён.")
+                st.rerun()
+        except users.UserError as e:
+            st.error(str(e))
+
+
 def admin_page() -> None:
     inject_css()
     if not ctx()["is_admin"]:
         st.error("Раздел доступен только администратору.")
         return
     st.markdown("### Администрирование")
+    from kbagent import users
+    if demo := users.demo_accounts():
+        st.error("Активны демо-учётки с паролями из открытого репозитория: " + ", ".join(demo) + ". На установке "
+                 "у заказчика удалите их или сбросьте пароли на вкладке «Пользователи» — или выполните "
+                 "scripts\\first_run.py.", icon=":material/gpp_bad:")
     tabs = st.tabs(["Эффект", "Спрос", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы",
-                    "Справочник", "Вопросы эксперту", "Качество", "Безопасность", "Система"])
+                    "Справочник", "Вопросы эксперту", "Качество", "Пользователи", "Безопасность", "Система"])
     for tab, show in zip(tabs, (effect_tab, demand_tab, journal, gaps, feedback, docs, reference, expert_queue,
-                                quality, security, system)):
+                                quality, users_tab, security, system)):
         with tab:
             show()
