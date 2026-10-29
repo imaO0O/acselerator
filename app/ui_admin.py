@@ -18,8 +18,8 @@ from kbagent.database import display
 from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
-from kbagent import (backup, demand, effect, experts, folder_sync, onec, pilot_report, prajs, spravochnik,
-                     tkp_registry)
+from kbagent import (backup, demand, effect, experts, folder_sync, jobs, onec, pilot_report, prajs,
+                     spravochnik, tkp_registry)
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -628,6 +628,53 @@ def quality() -> None:
                 st.markdown(rep["body"])
 
 
+JOB_STATES = {"ok": ":green[● работает]", "late": ":orange[● отстала]", "error": ":red[● ошибка]",
+              "never": ":gray[○ не запускалась]", "off": ":gray[— не настроена]", "running": ":blue[● идёт сейчас]"}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def scheduled_tasks() -> dict[str, bool] | None:
+    return jobs.scheduled()
+
+
+def jobs_panel() -> None:
+    """Фоновые задачи: когда последний раз отработали, не отстали ли, есть ли в Планировщике; запуск вручную."""
+    with st.container(border=True):
+        st.markdown("**Фоновые задачи**")
+        st.caption("Резервная копия раз в день, почта отдела, папка документов и цены из 1С — по расписанию "
+                   "Windows: зарегистрировать — scripts\\install_tasks.bat (почта, папка и 1С — если настроены в "
+                   "data\\settings.env). Итог каждого запуска — здесь.")
+        rows = jobs.status(registered=scheduled_tasks())
+        for r in rows:
+            sched = {True: "В Планировщике.", False: ":orange[Нет в Планировщике.]", None: ""}[r["registered"]]
+            when = f"успешно — {jobs.ago(r['age'])}" if r["last_ok"] else "успешных запусков не было"
+            st.markdown(f"{JOB_STATES[r['state']]} — **{r['title']}**, {jobs.every(r['every'])}"
+                        + (f"; {when}. {sched}" if r["state"] != "off" else ""))
+        for w in jobs.warnings(rows):
+            st.warning(w, icon=":material/schedule:")
+        missing = [r["title"] for r in rows if r["registered"] is False and r["state"] != "off"]
+        if missing:
+            st.info("Не зарегистрированы в Планировщике: " + ", ".join(missing) + " — выполните "
+                    "scripts\\install_tasks.bat на этом компьютере.")
+        ready = [r["key"] for r in rows if r["state"] != "off"]
+        c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
+        key = c1.selectbox("Запустить сейчас", ready, key="job-pick", format_func=lambda k: jobs.JOBS[k].title)
+        if c2.button("Запустить", icon=":material/play_arrow:", key="job-run", disabled=not ready):
+            with st.spinner(f"{jobs.JOBS[key].title}…"):
+                rec = jobs.run(key)
+            log_action("job_run", ctx()["login"], jobs.JOBS[key].title, rec["message"][:200])
+            st.session_state.job_note = (rec["ok"],
+                                         f"{jobs.JOBS[key].title}: {rec['message'] or 'код ' + str(rec['code'])}")
+            st.rerun()
+        if note := st.session_state.pop("job_note", None):
+            (st.success if note[0] else st.error)(note[1])
+        with st.expander("Вывод последних запусков"):
+            for r in rows:
+                if r["output"]:
+                    st.markdown(f"**{r['title']}** — {r['finished'] or '…'}")
+                    st.code(r["output"], language=None)
+
+
 def system() -> None:
     names = {"llm": "Языковая модель GigaChat 3.1 Lightning", "embed": "Поиск по смыслу (bge-m3)",
              "rerank": "Оценка релевантности (bge-reranker-v2-m3)"}
@@ -642,6 +689,7 @@ def system() -> None:
         st.markdown(f"**База знаний:** {meta['documents']} документов, {meta['chunks']} фрагментов, "
                     f"обновлена {meta['built']}.")
     st.markdown("Все модели работают на этом компьютере, доступ в интернет не нужен.")
+    jobs_panel()
     with st.container(border=True):
         st.markdown("**Резервная копия данных**")
         st.caption("Учётные записи и ключи, журналы, диалоги, решения эксперта, загруженные документы и папка "
@@ -805,6 +853,9 @@ def admin_page() -> None:
         st.error("Активны демо-учётки с паролями из открытого репозитория: " + ", ".join(demo) + ". На установке "
                  "у заказчика удалите их или сбросьте пароли на вкладке «Пользователи» — или выполните "
                  "scripts\\first_run.py.", icon=":material/gpp_bad:")
+    if late := jobs.warnings(jobs.status()):
+        st.warning("Фоновые задачи: " + "; ".join(late) + ". Подробнее — вкладка «Система».",
+                   icon=":material/schedule:")
     tabs = st.tabs(["Эффект", "Спрос", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы",
                     "Справочник", "Вопросы эксперту", "Качество", "Пользователи", "Безопасность", "Система"])
     for tab, show in zip(tabs, (effect_tab, demand_tab, journal, gaps, feedback, docs, reference, expert_queue,

@@ -4,6 +4,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# настройки установки строками KB_…=значение: их одинаково видят чат, REST API и задачи по расписанию
+# (Планировщик Windows не знает переменных, заданных в окне чата). Переменная окружения важнее файла.
+SETTINGS_FILE = ROOT / "data" / "settings.env"
+
+
+def read_settings_file(path: Path = SETTINGS_FILE) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return {}
+    out = {}
+    for line in lines:
+        key, sep, value = line.strip().partition("=")
+        if sep and key.strip().startswith("KB_"):
+            out[key.strip()] = value.strip().strip('"')
+    return out
+
+
+for _key, _value in read_settings_file().items():
+    os.environ.setdefault(_key, _value)
 
 
 def _env(name: str, default):
