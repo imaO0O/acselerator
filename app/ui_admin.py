@@ -19,7 +19,7 @@ from kbagent.ingest import ocr_available, registry_info
 from kbagent.uploads import (UPLOAD_TYPES, add_upload, approve_upload, documents, list_uploads, remove_upload,
                              similar_documents)
 from kbagent import (backup, demand, effect, experts, folder_sync, jobs, onec, pilot_report, prajs,
-                     spravochnik, tkp_registry)
+                     spravochnik, tkp_registry, vnedrenie)
 from kbagent.actions import log_action
 
 EVAL_USERS = {None, "", "eval"}
@@ -163,9 +163,9 @@ def docs_folder(agent) -> None:
         st.markdown("**Папка документов отдела**")
         folder = settings.docs_folder
         if not folder:
-            st.caption("Не задана. Укажите сетевую или локальную папку в переменной KB_DOCS_FOLDER — новые и "
-                       "изменённые файлы будут подключаться сами (scripts/sync_folder.py --watch 600), удалённые — "
-                       "убираться из базы знаний.")
+            st.caption("Не задана. Подключите сетевую или локальную папку на вкладке «Внедрение» → «Подключения» — "
+                       "новые и изменённые файлы будут подключаться сами (по расписанию, scripts/install_tasks.bat), "
+                       "удалённые — убираться из базы знаний.")
             return
         last = folder_sync.last_report()
         st.caption(f"Папка: {folder}. Реестр — catalog.yaml в папке или загруженный шаблон партнёра; без записи "
@@ -675,6 +675,93 @@ def jobs_panel() -> None:
                     st.code(r["output"], language=None)
 
 
+STEP_MARKS = {True: ":green[:material/check_circle:]", False: ":orange[:material/radio_button_unchecked:]",
+              None: ":gray[:material/remove:]"}
+
+
+def rollout_tab() -> None:
+    """Внедрение: что уже сделано у заказчика (видно по состоянию системы) и подключения папки, почты, 1С."""
+    st.caption("Шаги проверяются сами по состоянию системы — отмечать вручную ничего не нужно. Папка отдела, почта и "
+               "1С подключаются здесь же: настройки пишутся в data\\settings.env, их видят чат, REST API и задачи "
+               "по расписанию.")
+    items = vnedrenie.steps(models_ok=all(health().values()), registered=scheduled_tasks())
+    done, total = vnedrenie.progress(items)
+    st.progress(done / total if total else 0.0, text=f"Готово {done} из {total}"
+                + (" — система готова к работе" if done == total else ""))
+    for s in items:
+        st.markdown(f"{STEP_MARKS[s.done]} **{s.title}**{' (если нужно)' if s.optional else ''} — {s.detail}"
+                    + ("" if s.done else f"  \n:gray[{s.how}]"))
+    connections()
+
+
+def _saved(kind: str, values: dict, password: str, check) -> None:
+    """Сохранить подключение, проверить его и показать итог после обновления страницы."""
+    vnedrenie.save(values)
+    if password:
+        vnedrenie.save_password(kind, password)
+    ok, message = check()
+    log_action("settings", ctx()["login"], kind, ", ".join(k for k, v in values.items() if v)
+               + ("; пароль обновлён" if password else "") + f"; проверка: {'да' if ok else 'нет'}")
+    st.session_state.conn_note = ("success" if ok else "warning", f"Сохранено. Проверка: {message}.")
+    st.rerun()
+
+
+def connections() -> None:
+    st.markdown("#### Подключения")
+    if note := st.session_state.pop("conn_note", None):
+        getattr(st, note[0])(note[1])
+    with st.expander("Папка документов отдела", icon=":material/folder_shared:", expanded=not settings.docs_folder):
+        with st.form("conn-folder"):
+            path = st.text_input("Папка — сетевая или локальная", value=settings.docs_folder,
+                                 placeholder=r"\\server\Документы\Техотдел")
+            access = st.selectbox("Кому видны документы папки, пока их нет в реестре", list(ACCESS_LABELS)[:4],
+                                  index=list(ACCESS_LABELS).index(settings.docs_folder_access)
+                                  if settings.docs_folder_access in list(ACCESS_LABELS)[:4] else 0,
+                                  format_func=ACCESS_LABELS.get)
+            if st.form_submit_button("Сохранить и проверить", type="primary"):
+                path = path.strip()
+                _saved("folder", {"KB_DOCS_FOLDER": path, "KB_DOCS_FOLDER_ACCESS": access}, "",
+                       lambda: vnedrenie.check_folder(path))
+    with st.expander("Почтовый ящик отдела", icon=":material/mail:", expanded=False):
+        st.caption("Только чтение: письма не помечаются прочитанными, ничего не удаляется и не отправляется. Для ИБ — "
+                   "отдельная учётная запись ящика с правом только на чтение.")
+        with st.form("conn-mail"):
+            c1, c2 = st.columns([3, 1])
+            host = c1.text_input("Сервер IMAP", value=settings.mail_host, placeholder="mail.zavod.ru")
+            port = c2.text_input("Порт", value=str(settings.mail_port))
+            c1, c2 = st.columns(2)
+            user = c1.text_input("Ящик (логин)", value=settings.mail_user, placeholder="sales@zavod.ru")
+            folder = c2.text_input("Папка", value=settings.mail_folder)
+            password = st.text_input("Пароль" + (" — сохранён; введите, чтобы заменить"
+                                                 if vnedrenie.has_password("mail") else ""), type="password")
+            if st.form_submit_button("Сохранить и проверить", type="primary"):
+                if not port.strip().isdigit():
+                    st.error("Порт — число, обычно 993.")
+                else:
+                    _saved("mail", {"KB_MAIL_HOST": host, "KB_MAIL_PORT": port, "KB_MAIL_USER": user,
+                                    "KB_MAIL_FOLDER": folder or "INBOX"}, password, vnedrenie.check_mail)
+    with st.expander("Цены и остатки из 1С", icon=":material/sync:", expanded=False):
+        st.caption("Стандартный интерфейс OData, только чтение — в 1С ничего не меняется. Что включить в 1С — "
+                   "docs/vnedrenie.md, «Цены и остатки из 1С». Для ИБ — отдельный пользователь с правом только на "
+                   "чтение.")
+        with st.form("conn-1c"):
+            url = st.text_input("Адрес OData", value=vnedrenie.current("KB_1C_URL"),
+                                placeholder="http://1c-server/base/odata/standard.odata")
+            c1, c2, c3 = st.columns(3)
+            user = c1.text_input("Пользователь 1С", value=vnedrenie.current("KB_1C_USER"))
+            ptype = c2.text_input("Тип цен", value=vnedrenie.current("KB_1C_PRICE_TYPE"), placeholder="Оптовая")
+            presets = list(onec.PRESETS)
+            config = c3.selectbox("Конфигурация", presets, format_func=lambda k: onec.PRESETS[k]["title"],
+                                  index=presets.index(vnedrenie.current("KB_1C_CONFIG").lower())
+                                  if vnedrenie.current("KB_1C_CONFIG").lower() in presets else 0)
+            stock = st.toggle("Загружать остатки", value=vnedrenie.current("KB_1C_STOCK") in ("1", "true", "да"))
+            password = st.text_input("Пароль" + (" — сохранён; введите, чтобы заменить"
+                                                 if vnedrenie.has_password("1c") else ""), type="password")
+            if st.form_submit_button("Сохранить и проверить", type="primary"):
+                _saved("1c", {"KB_1C_URL": url, "KB_1C_USER": user, "KB_1C_PRICE_TYPE": ptype, "KB_1C_CONFIG": config,
+                              "KB_1C_STOCK": "1" if stock else "0"}, password, vnedrenie.check_1c)
+
+
 def system() -> None:
     names = {"llm": "Языковая модель GigaChat 3.1 Lightning", "embed": "Поиск по смыслу (bge-m3)",
              "rerank": "Оценка релевантности (bge-reranker-v2-m3)"}
@@ -857,8 +944,9 @@ def admin_page() -> None:
         st.warning("Фоновые задачи: " + "; ".join(late) + ". Подробнее — вкладка «Система».",
                    icon=":material/schedule:")
     tabs = st.tabs(["Эффект", "Спрос", "Журнал запросов", "Пробелы в документации", "Оценки", "Документы",
-                    "Справочник", "Вопросы эксперту", "Качество", "Пользователи", "Безопасность", "Система"])
+                    "Справочник", "Вопросы эксперту", "Качество", "Внедрение", "Пользователи", "Безопасность",
+                    "Система"])
     for tab, show in zip(tabs, (effect_tab, demand_tab, journal, gaps, feedback, docs, reference, expert_queue,
-                                quality, users_tab, security, system)):
+                                quality, rollout_tab, users_tab, security, system)):
         with tab:
             show()
