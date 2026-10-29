@@ -100,7 +100,7 @@ def test_checklist_sees_work_done(fresh_install, monkeypatch):
     log_action("prajs_1c", "1С", "Оптовая")
     (fresh_install / "eval" / "results").mkdir(parents=True)
     (fresh_install / "eval" / "results" / "partner.md").write_text("отчёт", encoding="utf-8")
-    items = {s.key: s for s in vnedrenie.steps(registered={"backup": True})}
+    items = {s.key: s for s in vnedrenie.steps(registered={"backup": True, "watchdog": True})}
     assert "models" not in items
     for key in ("demo", "users", "documents", "spravochnik", "prajs", "tkp", "jobs", "quality"):
         assert items[key].done, key

@@ -637,6 +637,30 @@ def scheduled_tasks() -> dict[str, bool] | None:
     return jobs.scheduled()
 
 
+def uptime_panel() -> None:
+    """Сторож: сколько каждая служба работает без сбоев, перезапуски за неделю, последняя ошибка."""
+    from kbagent import watchdog
+    rows = watchdog.summary()
+    if not rows:
+        st.caption("Автозапуск и перезапуск при сбоях не включён: scripts\\install_tasks.bat регистрирует сторожа — при "
+                   "входе в Windows и каждые 2 минуты он запускает модели и чат и перезапускает упавшее.")
+        return
+    with st.container(border=True):
+        st.markdown("**Работа без сбоев**")
+        for r in rows:
+            state = (f":green[● работает] {jobs.ago(r['uptime']).replace(' назад', '')} без сбоев"
+                     if r["up"] else ":red[● не отвечает]")
+            if r["up"] and r["uptime"] is not None and r["uptime"] < 2:
+                state = ":green[● работает] — только что запущен"
+            extra = f"; перезапусков за неделю: {r['restarts_week']}" if r["restarts_week"] else ""
+            st.markdown(f"{state} — **{r['title']}**{extra}")
+            if not r["up"] and r["error"]:
+                st.caption(f"Последняя ошибка: {r['error']}")
+        if any(r["failing"] >= 2 for r in rows):
+            st.warning("Служба не поднимается после перезапуска — смотрите журналы в папке logs (llm.log, chat.log).",
+                       icon=":material/error:")
+
+
 def jobs_panel() -> None:
     """Фоновые задачи: когда последний раз отработали, не отстали ли, есть ли в Планировщике; запуск вручную."""
     with st.container(border=True):
@@ -780,6 +804,7 @@ def system() -> None:
         st.markdown(f"**База знаний:** {meta['documents']} документов, {meta['chunks']} фрагментов, "
                     f"обновлена {meta['built']}.")
     st.markdown("Все модели работают на этом компьютере, доступ в интернет не нужен.")
+    uptime_panel()
     jobs_panel()
     with st.container(border=True):
         st.markdown("**Резервная копия данных**")

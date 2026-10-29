@@ -30,6 +30,7 @@ class Job:
     every: int                          # минут между запусками
     late: int                           # минут без успешного запуска — уже предупреждение
     timeout: int = 30 * 60              # секунд; дольше — запуск прерывается
+    logon: bool = False                 # ещё и при входе в Windows (автозапуск)
 
 
 JOBS = {j.key: j for j in [
@@ -37,6 +38,8 @@ JOBS = {j.key: j for j in [
     Job("mail", "Почта отдела", "check_mail.py", (), 5, 30, 10 * 60),
     Job("folder", "Папка документов отдела", "sync_folder.py", (), 10, 60),
     Job("1c", "Цены из 1С", "sync_1c.py", (), 60, 6 * 60, 10 * 60),
+    # автозапуск и перезапуск упавшего: модели, чат, API (kbagent/watchdog.py)
+    Job("watchdog", "Сторож: автозапуск и перезапуск", "watchdog.py", (), 2, 10, 6 * 60, logon=True),
 ]}
 
 

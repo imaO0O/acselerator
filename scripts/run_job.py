@@ -23,7 +23,7 @@ def main() -> int:
     args = ap.parse_args()
     if args.plan:
         for job in jobs.JOBS.values():
-            print(f"{job.key}|{job.every}|{int(jobs.configured(job.key))}|{job.title}")
+            print(f"{job.key}|{job.every}|{int(jobs.configured(job.key))}|{job.title}|{int(job.logon)}")
         return 0
     if not args.job:
         ap.error("укажите задачу")

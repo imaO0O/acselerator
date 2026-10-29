@@ -68,7 +68,7 @@ def test_manual_backup_archive_counts(fake_jobs):
 
 def test_job_periods_and_ages_read_well():
     assert [jobs.every(j.every) for j in jobs.JOBS.values()] == ["раз в день", "каждые 5 мин", "каждые 10 мин",
-                                                                 "каждый час"]
+                                                                 "каждый час", "каждые 2 мин"]
     assert jobs.ago(None) == "ни разу" and jobs.ago(45) == "45 мин назад" and jobs.ago(300) == "5 ч назад"
     assert all((jobs.ROOT / "scripts" / j.script).exists() for j in jobs.JOBS.values())
 

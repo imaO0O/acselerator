@@ -1,6 +1,7 @@
 ﻿# Регистрирует фоновые задачи агента в Планировщике заданий Windows (имена KBAgent-…):
 #   резервная копия — каждый день (по умолчанию в 22:00; если компьютер был выключен — при включении),
-#   почта отдела — каждые 5 минут, папка документов — каждые 10 минут, цены из 1С — каждый час.
+#   почта отдела — каждые 5 минут, папка документов — каждые 10 минут, цены из 1С — каждый час;
+#   сторож — при входе в Windows и каждые 2 минуты: запускает модели, чат и API, перезапускает упавшее.
 # Почта, папка и 1С регистрируются, только если настроены (data\settings.env). Итог каждого запуска — на
 # странице «Администрирование» → «Система»; там же видно, если задача отстала или завершилась с ошибкой.
 #   scripts\install_tasks.bat                      — зарегистрировать (повторный запуск обновляет задачи)
@@ -49,7 +50,7 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances 
 
 $done = 0
 foreach ($line in $plan) {
-    $key, $every, $ready, $title = $line -split "\|", 4
+    $key, $every, $ready, $title, $logon = $line -split "\|", 5
     if ($Jobs.Count -and $Jobs -notcontains $key) { continue }
     if (-not $Jobs.Count -and $ready -ne "1") { Write-Host "  $title — не настроено, пропущено"; continue }
     if ($key -eq "backup") {
@@ -59,6 +60,10 @@ foreach ($line in $plan) {
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
             -RepetitionInterval (New-TimeSpan -Minutes ([int]$every))
         $when = "каждые $every мин"
+        if ($logon -eq "1") {
+            $trigger = @($trigger, (New-ScheduledTaskTrigger -AtLogOn -User $user))
+            $when = "при входе в Windows и $when"
+        }
     }
     if ($DryRun) { Write-Host "  будет: $prefix$key — $title, $when"; continue }
     $action = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$runJob`" $key" -WorkingDirectory $root
