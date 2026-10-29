@@ -59,7 +59,8 @@ def test_check_1c_finds_price_type(monkeypatch):
 @pytest.fixture
 def fresh_install(tmp_path, tmp_settings, monkeypatch):
     """Установка «как из поставки»: демо-учётки, только демо-документы, нет действий, копий и прогонов."""
-    from kbagent import onec, prajs, spravochnik, tkp_registry, users
+    from kbagent import onec, prajs, spravochnik, tkp_registry, tls, users
+    monkeypatch.setattr(tls, "info", lambda: None)
     monkeypatch.setattr(spravochnik, "load", lambda: ([], None))
     monkeypatch.setattr(prajs, "load", lambda: ({}, None))
     monkeypatch.setattr(settings, "raw_dir", tmp_path / "raw")

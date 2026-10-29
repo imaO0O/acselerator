@@ -2,6 +2,8 @@
 
     python scripts/run_api.py                    # 127.0.0.1:8000
     python scripts/run_api.py --host 0.0.0.0     # доступ из сети предприятия
+
+Если есть сертификат (scripts/make_cert.py) — API работает по HTTPS.
 """
 import argparse
 import sys
@@ -17,4 +19,7 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
-    uvicorn.run("api.server:app", host=args.host, port=args.port, app_dir=str(ROOT))
+    from kbagent import tls
+    found = tls.paths()
+    ssl = {"ssl_certfile": str(found[0]), "ssl_keyfile": str(found[1])} if found else {}
+    uvicorn.run("api.server:app", host=args.host, port=args.port, app_dir=str(ROOT), **ssl)

@@ -24,7 +24,7 @@ from pathlib import Path
 from .config import ROOT
 
 # что принадлежит заказчику; пути — от корня установки
-STATE = ["logs", "data/settings.env", "data/users.yaml", "data/api_keys.yaml", "data/model_api_key.txt", "data/index",
+STATE = ["logs", "data/settings.env", "data/tls", "data/users.yaml", "data/api_keys.yaml", "data/model_api_key.txt", "data/index",
          "data/raw/uploaded", "data/raw/folder", "data/raw/partner", "data/spravochnik/pribory.csv",
          "data/spravochnik/prajs.csv", "data/spravochnik/prajs_1c.json", "data/glossary.yaml", "data/pravila_raschetov.yaml", "data/tkp", "data/mail"]
 SKIP = (".lock", ".tmp")                         # блокировка и недописанные файлы индекса

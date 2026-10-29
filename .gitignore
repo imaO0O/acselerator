@@ -30,6 +30,8 @@ data/mail/
 data/mail_password.txt
 # настройки установки (папка отдела, почта, 1С) — у каждого заказчика свои
 data/settings.env
+# сертификат и ключи HTTPS (scripts/make_cert.py)
+data/tls/
 data/1c_password.txt
 eval/partner*.yaml
 eval/priemka*.yaml

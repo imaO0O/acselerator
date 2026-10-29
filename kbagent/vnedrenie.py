@@ -216,6 +216,14 @@ def steps(models_ok: bool | None = None, registered: dict[str, bool] | None = No
     else:
         out.append(Step("mail", "Почта отдела", None, "не подключена — письма клиентов можно вставлять в чат "
                         "вручную", "«Подключения» ниже", optional=True))
+    from . import tls
+    cert = tls.info()
+    out.append(Step("https", "HTTPS для чата и API", bool(cert) and cert["days_left"] >= tls.WARN_DAYS,
+                    (f"сертификат на {', '.join(cert['names'][:3])} до {cert['until']}"
+                     + (" — пора перевыпустить" if cert["days_left"] < tls.WARN_DAYS else "")
+                     + ("; сотрудникам — data\\tls\\agent-ca.cer в доверенные" if cert["own_ca"] else ""))
+                    if cert else "нет — пароли и вопросы идут по сети открытым текстом",
+                    "python scripts\\make_cert.py (или --pfx от службы ИТ), затем перезапустить чат и API"))
     rows = jobs.status(registered=registered)
     if registered is not None:
         missing = [r["title"] for r in rows if r["state"] != "off" and not r["registered"]]

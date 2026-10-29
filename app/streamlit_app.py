@@ -31,8 +31,10 @@ st.logo(LOGO, size="large")
 
 def set_cookie(value: str, max_age: int) -> None:
     """Сеанс переживает перезагрузку страницы: в браузере хранится только случайный токен."""
+    # по HTTPS — с флагом Secure: токен не уйдёт по незашифрованному соединению
     components.html(f"<script>parent.document.cookie = '{COOKIE}={value}; path=/; max-age={max_age}; "
-                    "SameSite=Strict';</script>", height=0)
+                    "SameSite=Strict' + (parent.location.protocol === 'https:' ? '; Secure' : '');</script>",
+                    height=0)
 
 
 def current_user() -> dict | None:
