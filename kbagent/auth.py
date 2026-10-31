@@ -124,7 +124,8 @@ def _read_sessions() -> dict:
 def _write_sessions(sessions: dict) -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    sessions = {t: s for t, s in sessions.items() if now - s["created"] < SESSION_TTL}
+    # просроченные и записанные до хэширования (сам токен вместо его SHA-256) — выбрасываются
+    sessions = {t: s for t, s in sessions.items() if now - s["created"] < SESSION_TTL and len(t) == 64}
     tmp = _sessions_path().with_suffix(".json.tmp")
     tmp.write_text(json.dumps(sessions), encoding="utf-8")
     tmp.replace(_sessions_path())
