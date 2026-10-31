@@ -103,7 +103,7 @@ def sidebar() -> str:
             for c in shown[:40]:
                 active = c["id"] == conv["id"]
                 left, right = box.columns([7, 1], vertical_alignment="center", gap="small")
-                if left.button(c["title"], key=f"conv-{c['id']}", type="secondary" if active else "tertiary",
+                if left.button(md_plain(c["title"]), key=f"conv-{c['id']}", type="secondary" if active else "tertiary",
                                width="stretch", help=c["updated"]):
                     st.session_state.conv = auth.load_conversation(_key(), c["id"]) or auth.new_conversation()
                     st.rerun()

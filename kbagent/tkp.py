@@ -375,8 +375,27 @@ LETTER_TYPES = ["docx", "pdf", "txt", "eml"]
 NORMO_RE = re.compile(r"оформлени\w*|нормоконтрол\w*|\bГОСТ\b|7\.0\.97", re.I)
 
 
+# письмо клиента — первые страницы: 300-страничный скан из чужого письма не должен часами распознаваться,
+# а Word-файл, распаковывающийся в гигабайты («зип-бомба»), — забирать память
+LETTER_PAGES = 10
+LETTER_UNZIPPED = 50 * 2**20
+
+
+def _check_docx(data: bytes) -> None:
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            unzipped = sum(i.file_size for i in z.infolist())
+    except zipfile.BadZipFile as e:
+        raise ValueError("файл Word повреждён") from e
+    if unzipped > LETTER_UNZIPPED:
+        raise ValueError(f"файл Word распаковывается в {unzipped // 2**20} МБ — больше {LETTER_UNZIPPED // 2**20} МБ, "
+                         "не разбирается")
+
+
 def letter_text(filename: str, data: bytes) -> str:
-    """Текст письма клиента из приложенного файла: Word, PDF (скан — с распознаванием), текст, письмо .eml."""
+    """Текст письма клиента из приложенного файла: Word, PDF (скан — с распознаванием), текст, письмо .eml.
+    У PDF — первые LETTER_PAGES страниц; Word, распаковывающийся больше LETTER_UNZIPPED, не разбирается."""
     ext = filename.lower().rsplit(".", 1)[-1]
     if ext == "txt":
         for enc in ("utf-8-sig", "cp1251"):
@@ -396,6 +415,7 @@ def letter_text(filename: str, data: bytes) -> str:
         return f"{msg.get('subject', '')}\n{text}".strip()
     if ext == "docx":
         from docx import Document
+        _check_docx(data)
         doc = Document(io.BytesIO(data))
         lines = [p.text for p in doc.paragraphs]
         for table in doc.tables:
@@ -406,7 +426,7 @@ def letter_text(filename: str, data: bytes) -> str:
 
         from .ingest import _page_text
         with pymupdf.open(stream=data, filetype="pdf") as doc:
-            return "\n".join(_page_text(page, {}) for page in doc)
+            return "\n".join(_page_text(doc[i], {}) for i in range(min(doc.page_count, LETTER_PAGES)))
     return ""
 
 
