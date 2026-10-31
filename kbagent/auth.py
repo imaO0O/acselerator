@@ -103,9 +103,15 @@ def _public(user: dict) -> dict:
 
 
 # ---------- сеансы ----------
+# В браузере — случайный токен, на сервере — только его SHA-256: файл сеансов (журналы, копия диска) не даёт войти
+# под чужой учёткой. Запись — под блокировкой: два одновременных входа не теряют сеанс друг друга.
 
 def _sessions_path():
     return settings.log_dir / "sessions.json"
+
+
+def _token_id(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _read_sessions() -> dict:
@@ -119,21 +125,29 @@ def _write_sessions(sessions: dict) -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     now = time.time()
     sessions = {t: s for t, s in sessions.items() if now - s["created"] < SESSION_TTL}
-    _sessions_path().write_text(json.dumps(sessions), encoding="utf-8")
+    tmp = _sessions_path().with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(sessions), encoding="utf-8")
+    tmp.replace(_sessions_path())
+
+
+def _update_sessions(change) -> None:
+    from .store import _lock
+    with _lock(settings.log_dir):
+        sessions = _read_sessions()
+        change(sessions)
+        _write_sessions(sessions)
 
 
 def create_session(user: dict) -> str:
     token = secrets.token_urlsafe(32)
-    sessions = _read_sessions()
-    sessions[token] = {"login": user["login"], "created": time.time()}
-    _write_sessions(sessions)
+    _update_sessions(lambda s: s.update({_token_id(token): {"login": user["login"], "created": time.time()}}))
     return token
 
 
 def session_user(token: str | None) -> dict | None:
     if not token:
         return None
-    s = _read_sessions().get(token)
+    s = _read_sessions().get(_token_id(token))
     if not s or time.time() - s["created"] >= SESSION_TTL:
         return None
     u = load_users().get(s["login"])
@@ -142,15 +156,15 @@ def session_user(token: str | None) -> dict | None:
 
 def end_user_sessions(login: str) -> None:
     """Все сеансы пользователя — после блокировки или сброса пароля."""
-    sessions = {t: s for t, s in _read_sessions().items() if s["login"] != login}
-    _write_sessions(sessions)
+    def drop(sessions: dict) -> None:
+        for t in [t for t, s in sessions.items() if s["login"] == login]:
+            del sessions[t]
+    _update_sessions(drop)
 
 
 def end_session(token: str | None) -> None:
-    sessions = _read_sessions()
-    if token in sessions:
-        del sessions[token]
-        _write_sessions(sessions)
+    if token:
+        _update_sessions(lambda s: s.pop(_token_id(token), None))
 
 
 # ---------- диалоги ----------
