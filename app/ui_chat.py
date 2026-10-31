@@ -388,8 +388,9 @@ def render_answer(item: dict, i: int) -> None:
         if item["route"] in ("documents", "both"):
             st.button("Переспросить", key=f"reask-{uid}", icon=":material/refresh:", on_click=_ask,
                       args=(item["question"],))
-    if any(s.get("doc_kind") == KIND_PENDING for s in cited):
-        st.warning("Ответ опирается на документ, загруженный пользователем и ещё не утверждённый.",
+    if any(s.get("doc_kind") == KIND_PENDING for s in cited):  # загружен через чат или изменён в папке отдела
+        st.warning("Ответ опирается на документ, ещё не утверждённый администратором (загружен через чат "
+                   "или изменён в папке отдела) — сверьте с действующей редакцией.",
                    icon=":material/pending:")
 
     if item.get("rows"):

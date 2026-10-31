@@ -32,6 +32,24 @@ def md_plain(text: str) -> str:
     return MD_SPECIAL_RE.sub(r"\\\1", text)
 
 
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def plain_cells(wb) -> None:
+    """Excel-выгрузка — только текст и числа: строку на «=» openpyxl записывает формулой, и вопрос сотрудника или
+    комментарий «=HYPERLINK(…)» сработал бы у того, кто откроет файл. Своих формул в выгрузках нет."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
+
+
+def csv_safe(value):
+    """Значение для CSV, который откроют в Excel: текст на «=», «+», «-», «@» — с апострофом, не формулой."""
+    return "'" + value if isinstance(value, str) and value.startswith(FORMULA_START) else value
+
+
 def md_external(text: str) -> str:
     """Текст от внешнего отправителя (тема и отправитель письма, название клиента): как простой текст, и адрес
     «http://…» или «www.…» не становится кликабельной ссылкой внутри системы — так не подсунуть фишинг."""

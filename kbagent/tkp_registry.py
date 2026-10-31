@@ -214,6 +214,8 @@ def export(records: list[dict]) -> bytes:
                              for h in r["history"])])
     for col, width in zip("ABCDEFGHIJKL", (16, 16, 26, 9, 30, 14, 12, 13, 18, 20, 50, 60)):
         ws.column_dimensions[col].width = width
+    from .text import plain_cells
+    plain_cells(wb)                      # клиент, запрос и комментарии — из писем и от сотрудников: не формулы
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

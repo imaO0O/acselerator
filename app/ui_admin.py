@@ -10,6 +10,7 @@ import streamlit as st
 from app.ui_common import (ACCESS_LABELS, APP_NAME, ROOT, ROUTE_LABELS, STATUS_LABELS, ctx, get_agent, health,
                            index_meta, inject_css)
 from kbagent import auth
+from kbagent.text import csv_safe, md_plain
 from kbagent.config import settings
 from kbagent.actions import ACTIONS, load_actions
 from kbagent.gaps import find_gaps
@@ -26,7 +27,8 @@ EVAL_USERS = {None, "", "eval"}
 
 
 def _csv(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
+    """Выгрузка в CSV: вопросы и комментарии сотрудников на «=» не становятся формулами в Excel."""
+    return df.map(csv_safe).to_csv(index=False).encode("utf-8-sig")
 
 
 def journal() -> None:
@@ -178,6 +180,21 @@ def docs_folder(agent) -> None:
                 st.warning(last["warning"])
             for name, error in last.get("errors", []):
                 st.error(f"{name}: {error}")
+        waiting = folder_sync.pending()
+        if waiting:
+            hold = settings.docs_folder_review == "hold"
+            st.warning(f"Ждут проверки: {len(waiting)} — новые или изменённые в папке документы. "
+                       + ("До утверждения их видит только администратор." if hold else
+                          "Ответы по ним идут с предупреждением «документ не утверждён»."),
+                       icon=":material/rule:")
+            for d in waiting[:30]:
+                c1, c2 = st.columns([5, 1], vertical_alignment="center")
+                c1.markdown(f"**{md_plain(d.get('title', d['id']))}** · {md_plain(d.get('source_file', ''))}  \n"
+                            f":gray[изменён {d.get('changed_at', '—')}]")
+                if c2.button("Утвердить", key=f"folder-ok-{d['id']}", width="stretch"):
+                    folder_sync.approve(agent.index, d["id"], ctx()["login"])
+                    st.session_state.folder_note = f"Утверждён: {d.get('title', d['id'])}."
+                    st.rerun()
         if st.button("Проверить папку сейчас", icon=":material/sync:", key="folder-sync"):
             with st.spinner("Сверяю папку с базой знаний…"):
                 rep = folder_sync.sync(agent.index, Path(folder), user=ctx()["login"])

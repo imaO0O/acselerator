@@ -57,7 +57,7 @@ class Answer:
 
 def source_label(hit: Hit) -> str:
     c = hit.chunk
-    parts = [c.doc_title + (" (загружен пользователем, не утверждён)" if c.doc_kind == "Загруженный документ" else "")]
+    parts = [c.doc_title + (" (не утверждён администратором)" if c.doc_kind == "Загруженный документ" else "")]
     if c.clause:
         parts.append(f"п. {c.clause}")
     if c.page_start:

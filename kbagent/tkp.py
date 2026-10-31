@@ -840,6 +840,8 @@ def tkp_xlsx(t: dict, number: str, date: str, terms: dict | None = None, company
     for s in t.get("sources", []):
         src.append([s["n"], s["label"]])
     src.column_dimensions["B"].width = 100
+    from .text import plain_cells
+    plain_cells(wb)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

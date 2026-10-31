@@ -44,3 +44,18 @@ def test_huge_attachment_is_marked_not_parsed(monkeypatch):
     parsed = mailbox.parse_message(msg.as_bytes())
     assert parsed["attachments"] == ["Skan.pdf (больше 0 МБ — не разбиралось)"]
     assert "мультиметра" in parsed["letter"]
+
+
+def test_exports_do_not_turn_text_into_formulas():
+    import openpyxl
+    from kbagent import tkp_registry
+    from kbagent.text import csv_safe
+    record = {"number": "ТКП-2026-0001", "date": "2026-10-31 10:00", "client": '=HYPERLINK("http://x","ООО")',
+              "positions": 1, "models": ["DT9205A"], "total": 1450.0, "vat": 261.48, "valid_until": "30.11.2026",
+              "status": "проигран", "approved_by": "Менеджер", "question": "=cmd|' /C calc'!A0",
+              "history": [{"at": "31.10.2026 10:00", "status": "проигран", "by": "Менеджер", "comment": "=1+1"}]}
+    ws = openpyxl.load_workbook(io.BytesIO(tkp_registry.export([record]))).active
+    assert all(c.data_type != "f" for row in ws.iter_rows() for c in row)
+    assert ws["C2"].value == '=HYPERLINK("http://x","ООО")'                 # текст сохранён как есть
+    assert csv_safe("=1+1") == "'=1+1" and csv_safe("@SUM(A1)") == "'@SUM(A1)" and csv_safe("ТКП") == "ТКП"
+    assert csv_safe(5) == 5

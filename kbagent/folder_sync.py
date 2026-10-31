@@ -30,7 +30,8 @@ from . import changes
 from .actions import log_action
 from .config import settings
 from .editions import chunk_clauses, compare_clauses
-from .ingest import group_of, load_catalog
+from .ingest import DRAFT, group_of, load_catalog
+from .uploads import KIND_PENDING
 
 MIRROR = settings.raw_dir / "folder"
 STATE = "sync_state.json"
@@ -144,6 +145,7 @@ def sync(index, source: Path, index_dir: Path | None = None, mirror: Path | None
             entry.update(id=doc_id, source_file=rel)
             if "title" not in entry:
                 entry.update(title=guess_title(path) or Path(rel).stem.replace("_", " "), kind=KIND, access=access)
+            _hold_for_review(entry, user)
             catalog[doc_id] = entry
             _write_catalog(catalog_path, catalog)
             before = chunk_clauses([c for c in index.chunks if c.doc_id == doc_id]) if known else []
@@ -179,6 +181,44 @@ def sync(index, source: Path, index_dir: Path | None = None, mirror: Path | None
         if gone:
             _write_catalog(catalog_path, catalog)
     return _finish(rep, state, mirror, t0)
+
+
+def _hold_for_review(entry: dict, user: str) -> None:
+    """Писать в общую папку может больше людей, чем утверждать регламенты: новый или изменённый файл до проверки
+    администратором — «не утверждён» (ответ по нему с предупреждением) или, в режиме hold, виден только ему."""
+    mode = settings.docs_folder_review
+    if mode == "off":
+        return
+    if entry.get("kind") != KIND_PENDING:
+        entry["approved_kind"] = entry.get("kind", KIND)
+    if mode == "hold" and entry.get("access") != DRAFT:
+        entry["approved_access"] = entry.get("access", settings.docs_folder_access)
+        entry["access"] = DRAFT
+    entry.update(kind=KIND_PENDING, approved=False, changed_by=user, changed_at=time.strftime("%Y-%m-%d %H:%M"))
+
+
+def pending(mirror: Path | None = None) -> list[dict]:
+    """Документы папки, ждущие проверки администратором."""
+    return [d for d in _read((mirror or MIRROR) / CATALOG) if d.get("approved") is False]
+
+
+def approve(index, doc_id: str, user: str | None, index_dir: Path | None = None, mirror: Path | None = None) -> dict:
+    """Администратор проверил документ из папки: прежний вид и доступ возвращаются, предупреждение снимается."""
+    mirror = mirror or MIRROR
+    path = mirror / CATALOG
+    catalog = {d["id"]: d for d in _read(path)}
+    entry = catalog.get(doc_id)
+    if entry is None or entry.get("approved") is not False:
+        raise ValueError(f"документ {doc_id} не ждёт проверки")
+    entry.update(kind=entry.pop("approved_kind", KIND), approved=True, approved_by=user,
+                 approved_at=time.strftime("%Y-%m-%d %H:%M"))
+    if "approved_access" in entry:
+        entry["access"] = entry.pop("approved_access")
+    _write_catalog(path, catalog)
+    index.update_meta(doc_id, index_dir or settings.index_dir, doc_kind=entry["kind"],
+                      access=entry.get("access", settings.docs_folder_access))
+    log_action("approve", user, entry.get("title", doc_id), "документ из папки отдела")
+    return entry
 
 
 def _write_catalog(path: Path, catalog: dict) -> None:
