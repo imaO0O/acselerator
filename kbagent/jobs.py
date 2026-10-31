@@ -39,7 +39,7 @@ JOBS = {j.key: j for j in [
     Job("folder", "Папка документов отдела", "sync_folder.py", (), 10, 60),
     Job("1c", "Цены из 1С", "sync_1c.py", (), 60, 6 * 60, 10 * 60),
     # автозапуск и перезапуск упавшего: модели, чат, API (kbagent/watchdog.py)
-    Job("watchdog", "Сторож: автозапуск и перезапуск", "watchdog.py", (), 2, 10, 6 * 60, logon=True),
+    Job("watchdog", "Сторож: автозапуск и перезапуск", "storozh.py", (), 2, 10, 6 * 60, logon=True),
 ]}
 
 

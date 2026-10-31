@@ -53,7 +53,7 @@ def set_tasks(root: Path, on: bool) -> None:
 def start_services(root: Path) -> None:
     """Один проход сторожа этой установки: модели, чат, API (если включён)."""
     python = root / ".venv" / "Scripts" / "python.exe"
-    script = root / "scripts" / "watchdog.py"
+    script = root / "scripts" / "storozh.py"
     if script.exists():
         subprocess.run([str(python if python.exists() else sys.executable), str(script)], cwd=root,
                        capture_output=True, timeout=600, creationflags=NO_WINDOW)

@@ -50,3 +50,16 @@ def test_watchdog_runs_at_logon_and_every_two_minutes():
     job = jobs.JOBS["watchdog"]
     assert job.logon and job.every == 2 and (jobs.SCRIPTS / job.script).exists()
     assert "chat" in watchdog.watched()
+
+
+def test_scripts_do_not_shadow_installed_packages():
+    """scripts/ — первая папка в sys.path у run_chat.py: скрипт с именем библиотеки подменяет её.
+    Так scripts/watchdog.py подменил watchdog, через который Streamlit следит за файлами, — чат не открывался."""
+    import sys
+    from importlib.machinery import PathFinder
+    from pathlib import Path
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    # поиск только по установленным пакетам — без папки проекта и без уже загруженных модулей
+    path = [p for p in sys.path if Path(p or ".").resolve() not in (scripts, scripts.parent)]
+    clash = [f.stem for f in scripts.glob("*.py") if PathFinder.find_spec(f.stem, path) is not None]
+    assert clash == [], f"имена скриптов совпадают с установленными пакетами: {clash}"
