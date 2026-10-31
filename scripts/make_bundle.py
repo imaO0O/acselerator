@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from setup import LLAMA_BUILD, LLAMA_URL, fetch  # noqa: E402
 
 PYTHON_URL = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+CODE_DIRS = ("kbagent", "app", "api", "scripts", "eval", "tests", "docs")   # только из git — лишнее удаляется
 
 INSTALL_BAT = r"""@echo off
 chcp 65001 >nul
@@ -143,7 +144,16 @@ def main() -> None:
     print("1. Код и документы (из git — только то, что в репозитории)")
     archive = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=zip", "HEAD"],
                              capture_output=True, check=True).stdout
-    zipfile.ZipFile(io.BytesIO(archive)).extractall(agent)
+    code = zipfile.ZipFile(io.BytesIO(archive))
+    code.extractall(agent)
+    # поставка собирается поверх прежней: файл кода, удалённый или переименованный в git, иначе остался бы в ней —
+    # так scripts/watchdog.py (переименован в storozh.py) подменял бы библиотеку и чат не открывался
+    keep = set(code.namelist())
+    for part in CODE_DIRS:
+        for f in sorted((agent / part).rglob("*")) if (agent / part).is_dir() else []:
+            if f.is_file() and "__pycache__" not in f.parts and f.relative_to(agent).as_posix() not in keep:
+                f.unlink()
+                print(f"   убран устаревший файл: {f.relative_to(agent).as_posix()}")
 
     print("2. Индекс, документы для показа, языки распознавания, llama.cpp" + ("" if args.no_models else ", модели"))
     if not (ROOT / "data" / "show").exists():
