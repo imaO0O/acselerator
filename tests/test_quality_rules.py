@@ -77,3 +77,24 @@ def test_budget_is_read_with_money_unit_only():
     assert "В бюджет до 50\xa0000\xa0₽" in text and "АКИП-4115/1В** — 38\xa0900\xa0₽" in text and "Дороже бюджета" in text
     t = tkp.parse("Просим КП: 2 осциллографа с полосой не менее 150 МГц и 4 каналами. Бюджет до 300 000 рублей.", {"all"})
     assert t.budget == 300000 and "Бюджет клиента — до 300\xa0000\xa0₽: итог" in tkp.answer_text(t)
+
+
+def test_term_from_another_found_fragment_repairs_reference_invented_term_refuses(monkeypatch):
+    """«DCV» есть на соседней странице руководства — ответ остаётся, ссылка дополняется; «Mode», которого нет ни в
+    одном найденном фрагменте, — выдумка: отказ."""
+    from kbagent import llm
+    from kbagent.retriever import Retrieval
+    hits = [make_hit("Максимальное напряжение: не более 1000 В.", "jupiter", "1"),
+            make_hit("Постоянное напряжение DCV: пределы 200 мВ … 1000 В.", "jupiter", "2")]
+    retrieval = Retrieval(hits=hits, best_score=0.99, confident=True, scored_by="reranker")
+
+    def model(answer):
+        monkeypatch.setattr(llm, "chat", lambda messages, max_tokens=None, temperature=0.0: (answer, {"seconds": 0.1}))
+
+    model("Максимальное входное напряжение — 1000 В для DCV [1].")
+    a = A.answer_from_documents("Какое максимальное входное напряжение у Юпитер 830B?", retrieval)
+    assert a.status == "answer" and a.stats["refs_repaired"] == [2] and "1000 В" in a.text
+    assert "2]" in a.text                                                   # ссылка на фрагмент с «DCV» добавлена
+    model("Нажмите DISPLAY и выберите XY Mode [1].")
+    a = A.answer_from_documents("Как включить режим XY?", retrieval)
+    assert a.status == "model_refused" and a.stats["unsupported_terms"] == ["DISPLAY", "Mode"]

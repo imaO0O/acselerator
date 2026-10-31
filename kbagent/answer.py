@@ -598,20 +598,37 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
     text = _strip_service_lines(_clean_refs(text, valid))
     if _is_refusal(text):
         return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
-    terms = _unsupported_terms(question, text, hits, valid)
+    known = f"{question} {facts or ''}"        # запись учёта («конденсатор … X7R») модель видела вместе с фрагментами
+    terms = _unsupported_terms(known, text, hits, valid)
     if terms:
-        # «нажать DISPLAY, выбрать XY Mode» со ссылкой на страницу, где про XY ничего нет: модель додумала путь в
-        # меню — одна попытка ответить строго по фрагментам, иначе честный отказ
+        # «нажать DISPLAY, выбрать XY Mode» со ссылкой на страницу, где про XY ничего нет: одна попытка строго по
+        # фрагментам — с подсказкой, в каком найденном фрагменте название есть. Не вышло: если фрагмент с названием
+        # подтверждает и саму фразу («1000 В для DCV» — 78 % её слов в нём), ссылка не та — она дополняется этим
+        # фрагментом; если нет («нажать DISPLAY, выбрать XY Mode в меню дисплея» — 29 %: там лишь «XY Mode» в списке
+        # меню) — модель додумала, честный отказ
         stats["unsupported_terms"] = terms
+        words = set(tokenize(REF_RE.sub("", text)))
+        found = {t: [n for n in range(1, len(hits) + 1) if t.lower() in hits[n - 1].chunk.text.lower()] for t in terms}
+        where = {t: [n for n in found[t] if len(words & set(tokenize(hits[n - 1].chunk.text))) >= 0.5 * len(words)]
+                 for t in terms}
+        invented = [t for t in terms if not where[t]]
+        hint = "; ".join(f"«{t}» — во фрагменте [{', '.join(map(str, found[t][:2]))}]" for t in terms if found[t])
         again = _retry(messages, text, hits, f"В ответе есть названия, которых нет во фрагментах, на которые ты "
-                                             f"ссылаешься: {', '.join(terms)}. Перепиши ответ строго по фрагментам: "
-                                             "кнопки, пункты меню и режимы называй точно как во фрагменте и ставь "
-                                             f"ссылку [n] на фрагмент, где они есть. Если во фрагментах этого нет — "
-                                             f"ответь {NO_DATA}.")
-        if again is None or _unsupported_terms(question, again[0], hits, again[1]):
+                                             f"ссылаешься: {', '.join(terms)}. "
+                                             + (f"Где они есть: {hint}. " if hint else "")
+                                             + "Перепиши ответ строго по фрагментам: кнопки, пункты меню и режимы "
+                                             "называй точно как во фрагменте и ставь ссылку [n] на фрагмент, где они "
+                                             f"есть. Если во фрагментах этого нет — ответь {NO_DATA}.")
+        if again is not None and not _unsupported_terms(known, again[0], hits, again[1]):
+            text, valid = again
+            stats["terms_fixed"] = True
+        elif invented:
             return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
-        text, valid = again
-        stats["terms_fixed"] = True
+        else:
+            extra = sorted({where[t][0] for t in terms} - set(valid))
+            text = text.rstrip() + f" [{', '.join(map(str, extra))}]"
+            valid = sorted(set(valid) | set(extra))
+            stats["refs_repaired"] = extra
     if VALUE_Q_RE.search(question) and not _has_number(text):
         # спросили величину, а в ответе нет числа: одна попытка найти значение во фрагментах
         stats["value_missing"] = True
