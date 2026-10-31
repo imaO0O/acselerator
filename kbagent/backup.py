@@ -29,6 +29,9 @@ STATE = ["logs", "data/settings.env", "data/tls", "data/users.yaml", "data/api_k
          "data/raw/uploaded", "data/raw/folder", "data/raw/partner", "data/spravochnik/pribory.csv",
          "data/spravochnik/prajs.csv", "data/spravochnik/prajs_1c.json", "data/glossary.yaml", "data/pravila_raschetov.yaml", "data/tkp", "data/mail"]
 SKIP = (".lock", ".tmp")                         # блокировка и недописанные файлы индекса
+# не копируются: ключ центра сертификации агента (с ним можно выпустить сертификат на имя сервера — при
+# восстановлении центр создаётся заново), действующие сеансы и счётчики неудачных входов (временное)
+NEVER = {"data/tls/ca-key.pem", "logs/sessions.json", "logs/login_failures.json"}
 PORTS = {8501: "чат", 8000: "REST API"}
 
 
@@ -49,7 +52,7 @@ def _files(root: Path) -> list[Path]:
         elif p.is_dir():
             out += [f for f in sorted(p.rglob("*")) if f.is_file() and not f.name.endswith(SKIP)
                     and ".tmp." not in f.name]
-    return out
+    return [f for f in out if f.relative_to(root).as_posix() not in NEVER]
 
 
 def _sha(data: bytes) -> str:

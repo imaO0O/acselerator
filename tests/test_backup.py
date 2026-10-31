@@ -107,3 +107,18 @@ def test_same_disk_by_drive_letter_and_network_share(tmp_path):
         assert not backup.same_disk(Path("//backup-server/agent"), root)
     else:
         assert backup.same_disk(tmp_path / "x", tmp_path)
+
+
+def test_ca_key_and_live_sessions_stay_out_of_backup(tmp_path):
+    """С ключом центра агента можно выпустить сертификат на имя сервера, с токеном — войти под чужой учёткой:
+    в архив (и его копию на другом диске) они не попадают."""
+    root = tmp_path / "v1"
+    customer_install(root)
+    put(root, "data/tls/cert.pem", "сертификат сервера")
+    put(root, "data/tls/key.pem", "ключ сервера")
+    put(root, "data/tls/ca-key.pem", "ключ центра агента")
+    put(root, "logs/sessions.json", '{"токен": {"login": "admin"}}')
+    put(root, "logs/login_failures.json", "{}")
+    names = set(zipfile.ZipFile(backup.create(root, tmp_path / "arch")).namelist())
+    assert {"data/tls/cert.pem", "data/tls/key.pem", "logs/audit.jsonl"} <= names
+    assert not names & {"data/tls/ca-key.pem", "logs/sessions.json", "logs/login_failures.json"}

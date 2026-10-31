@@ -236,9 +236,12 @@ def steps(models_ok: bool | None = None, registered: dict[str, bool] | None = No
                         "вручную", "«Подключения» ниже", optional=True))
     from . import tls
     cert = tls.info()
-    out.append(Step("https", "HTTPS для чата и API", bool(cert) and cert["days_left"] >= tls.WARN_DAYS,
+    out.append(Step("https", "HTTPS для чата и API", bool(cert) and cert["days_left"] >= tls.WARN_DAYS
+                    and not cert.get("ca_unconstrained"),
                     (f"сертификат на {', '.join(cert['names'][:3])} до {cert['until']}"
                      + (" — пора перевыпустить" if cert["days_left"] < tls.WARN_DAYS else "")
+                     + (" — центр агента не ограничен именами сервера: перевыпустите сертификат и раздайте "
+                        "agent-ca.cer заново" if cert.get("ca_unconstrained") else "")
                      + ("; сотрудникам — data\\tls\\agent-ca.cer в доверенные" if cert["own_ca"] else ""))
                     if cert else "нет — пароли и вопросы идут по сети открытым текстом",
                     "python scripts\\make_cert.py (или --pfx от службы ИТ), затем перезапустить чат и API"))
