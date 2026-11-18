@@ -1,5 +1,6 @@
 """Isolated trade router: authentication, role checks, import limits and trust boundary."""
 import base64
+import hashlib
 import io
 from zipfile import ZipFile
 
@@ -190,6 +191,34 @@ def test_xlsx_import_sheet_and_mapping(api):
     assert response.status_code == 200 and response.json()["imported"] == 1
     hit, = api.post("/trade/search", headers=headers(), json={"query": "X-1"}).json()
     assert hit["price"] == 123 and hit["sheet"] == "Offers"
+    assert trade.trade_sources.read(trade.ROOT / "data" / "trade", hit["source_sha256"]) == stream.getvalue()
+
+
+def test_csv_import_archives_original_under_search_digest(api):
+    seed(api)
+    hit, = api.post("/trade/search", headers=headers(), json={"query": "A-1"}).json()
+    assert hit["source_sha256"] == hashlib.sha256(CSV).hexdigest()
+    assert trade.trade_sources.read(trade.ROOT / "data" / "trade", hit["source_sha256"]) == CSV
+
+
+def test_failed_import_does_not_archive(api, monkeypatch):
+    def unexpected_archive(*args):
+        pytest.fail("Original must not be archived when import fails")
+    monkeypatch.setattr(trade.trade_sources, "archive", unexpected_archive)
+    result = api.post("/trade/catalog/import", headers=headers(ADMIN),
+                      json=upload(mapping={"article": "missing", "name": "name"}))
+    assert result.status_code == 422
+
+
+def test_archive_runs_after_import_and_failure_is_safe(api, monkeypatch):
+    def failed_archive(root, data):
+        assert root == trade.ROOT / "data" / "trade"
+        assert data == CSV
+        assert TradeCatalog(root / "catalog.sqlite").search("A-1")
+        raise OSError(SECRET)
+    monkeypatch.setattr(trade.trade_sources, "archive", failed_archive)
+    result = api.post("/trade/catalog/import", headers=headers(ADMIN), json=upload())
+    assert result.status_code == 503 and SECRET not in result.text
 
 
 @pytest.mark.parametrize("exception,code", [(ValueError(SECRET), 422), (OSError(SECRET), 503)])

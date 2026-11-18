@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from kbagent import trade_sources
 from kbagent.config import ROOT, settings
 from kbagent.trade_catalog import TradeCatalog
 from kbagent.trade_export import export_xlsx, proposal_docx
@@ -176,8 +177,14 @@ def build_router(client_dependency) -> APIRouter:
             raise HTTPException(413, "Каталог — до 100 МБ")
         if not data:
             raise HTTPException(422, "Файл пуст")
-        return _run(lambda: _catalog().import_table(req.filename, data, req.mapping,
-                                                   catalog=req.catalog, sheet=req.sheet))
+        def import_and_archive():
+            catalog = _catalog()
+            report = catalog.import_table(req.filename, data, req.mapping,
+                                          catalog=req.catalog, sheet=req.sheet)
+            trade_sources.archive(catalog.path.parent, data)
+            return report
+
+        return _run(import_and_archive)
 
     @router.post("/export")
     def export(req: ExportRequest, who: dict = Depends(trade_client)):
