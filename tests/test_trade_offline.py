@@ -8,6 +8,7 @@ from collections import Counter
 import copy
 import io
 import json
+import re
 import socket
 from zipfile import ZipFile
 
@@ -91,13 +92,46 @@ def test_structured_trade_demo_and_selected_exports_without_network(monkeypatch,
             exported = [dict(zip(values[start], row)) for row in values[start + 1:start + 1 + len(selected_rows)]]
             assert Counter((row["Артикул"], row["Количество"]) for row in exported) == Counter(expected_selections)
             assert all(row["Включено в предложение"] == "Да" for row in exported)
+            assert all(row["Статус"] == "Точное совпадение" for row in exported)
         finally:
             book.close()
     document = Document(io.BytesIO(docx))
-    assert len(document.tables) == len(selected_rows)
-    fields = [{row.cells[0].text: row.cells[1].text for row in table.rows} for table in document.tables]
-    assert Counter((row["Артикул"], float(row["Количество"])) for row in fields) == Counter(expected_selections)
-    assert any("ЧЕРНОВИК" in paragraph.text for paragraph in document.paragraphs)
+    assert len(document.tables) == 1
+    table = document.tables[0]
+    assert len(table.columns) == 9
+    assert len(table.rows) == len(selected_rows) + 1
+    labels = [cell.text for cell in table.rows[0].cells]
+    assert labels == ["№", "Артикул / наименование", "Кол-во", "Цена за ед.\nс НДС",
+                      "Сумма\nс НДС", "НДС\nставка / сумма", "Наличие", "Срок поставки", "Статус"]
+    fields = [dict(zip(labels, [cell.text for cell in row.cells])) for row in table.rows[1:]]
+    assert Counter((row["Артикул / наименование"].split(" — ", 1)[0], float(row["Кол-во"]))
+                   for row in fields) == Counter(expected_selections)
+    assert all(row["Статус"] == "Точное совпадение\nВключено" for row in fields)
+
+    paragraphs = [paragraph.text for paragraph in document.paragraphs]
+    assert any("ЧЕРНОВИК" in text for text in paragraphs)
+    appendix_start = paragraphs.index("Источники") + 1
+    source_lines = [text for text in paragraphs[appendix_start:] if text.startswith("[")]
+    sources = {}
+    for text in source_lines:
+        match = re.fullmatch(r"\[(\d+)\] (.+); строка источника: (.+)", text)
+        assert match is not None, text
+        reference, source, source_row = match.groups()
+        assert reference not in sources
+        sources[reference] = (source, source_row)
+    expected_sources = {(row["selected"]["source"], str(row["selected"]["source_row"]))
+                        for row in selected_rows}
+    assert set(sources.values()) == expected_sources
+    assert len(sources) == len(expected_sources)
+    for exported_row, selected_row in zip(fields, selected_rows):
+        selected = selected_row["selected"]
+        description = exported_row["Артикул / наименование"]
+        assert exported_row["№"] == str(selected_row["line"])
+        assert description.startswith(f"{selected['article']} — {selected['name']}\n")
+        assert f"\nЗапрос: {selected_row['query']}\n" in description
+        reference = re.search(r"; \[(\d+)\]$", description)
+        assert reference is not None, description
+        assert sources[reference.group(1)] == (selected["source"], str(selected["source_row"]))
     for payload in (xlsx, docx):
         with ZipFile(io.BytesIO(payload)) as archive:
             assert archive.testzip() is None
