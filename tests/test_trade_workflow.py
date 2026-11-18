@@ -1,8 +1,7 @@
 """Offline integration coverage; all databases, originals and logs are temporary.
 
-Known implementation defects are strict xfails: fixing them should produce an
-XPASS and prompt removal of the marker. Run AppTest outside the Windows sandbox
-because Streamlit's local socketpair can hang inside it.
+Run AppTest outside the Windows sandbox because Streamlit's local socketpair
+can hang inside it.
 """
 import csv
 import hashlib
@@ -308,7 +307,6 @@ def test_duplicate_request_lines_cannot_exceed_combined_stock(tmp_path):
     assert offered_qty <= 5, 'Two offered lines allocate eight units from a five-unit stock'
 
 
-@pytest.mark.xfail(strict=True, reason='GigaChat quantity validation treats the numeric article as valid quantity evidence')
 def test_letter_model_cannot_use_article_number_as_quantity(monkeypatch):
     text = 'Артикул 12345 — 2 шт.'
     monkeypatch.setattr(llm, 'chat', lambda *a, **kw: (json.dumps([
@@ -317,7 +315,6 @@ def test_letter_model_cannot_use_article_number_as_quantity(monkeypatch):
         parse_letter_with_gigachat(text)
 
 
-@pytest.mark.xfail(strict=True, reason='Valid letter rejected when an earlier numeric article exceeds quantity limit')
 def test_letter_numeric_article_does_not_break_valid_quantity(monkeypatch):
     text = 'Артикул 123456789 — 2 шт.'
     monkeypatch.setattr(llm, 'chat', lambda *a, **kw: (json.dumps([
