@@ -1,0 +1,11 @@
+{
+  "demo": true,
+  "case": "agri",
+  "catalog_rows": 3,
+  "positions": [
+    {"kind": "exact", "articles": ["DEMO-AG-001"], "qty": 2},
+    {"kind": "cross", "articles": ["DEMO-AG-002"], "qty": 4},
+    {"kind": "description", "articles": ["DEMO-AG-002", "DEMO-AG-003"], "qty": 3},
+    {"kind": "unknown", "articles": [], "qty": 1}
+  ]
+}

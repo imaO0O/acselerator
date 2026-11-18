@@ -1,0 +1,24 @@
+{
+  "demo": true,
+  "case": "drawings",
+  "catalog_rows": 3,
+  "positions": [
+    {"kind": "exact", "articles": ["DEMO-DR-001"], "qty": 1},
+    {"kind": "cross", "articles": ["DEMO-DR-002"], "qty": 2},
+    {"kind": "description", "articles": ["DEMO-DR-003"], "qty": 4},
+    {"kind": "unknown", "articles": [], "qty": 1}
+  ],
+  "drawing": {
+    "article": "DEMO-DR-001",
+    "fields": {
+      "designation": "DEMO-DR-001",
+      "name": "ДЕМО узел опоры",
+      "material": "ДЕМО сталь С0 (вымышленная)",
+      "mass": "1,25 кг (ДЕМО)"
+    },
+    "positions": [
+      {"kind": "exact", "articles": ["DEMO-DR-002"], "qty": 2},
+      {"kind": "exact", "articles": ["DEMO-DR-003"], "qty": 4}
+    ]
+  }
+}
