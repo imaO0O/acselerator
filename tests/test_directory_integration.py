@@ -35,3 +35,13 @@ def test_changing_provider_invalidates_existing_local_session(tmp_settings, monk
     assert auth.session_user(token)
     monkeypatch.setenv('KB_AUTH_PROVIDER', 'ldap')
     assert auth.session_user(token) is None
+
+
+def test_ldap_history_isolation(tmp_settings):
+    owner = 'ldap:user.name'
+    other = 'ldap:user_name'
+    conversation = auth.new_conversation()
+    conversation['items'] = [{'question': 'Запрос первого сотрудника', 'text': 'Ответ'}]
+    auth.save_conversation(owner, conversation)
+    assert auth.load_conversation(owner, conversation['id']) is not None
+    assert auth.load_conversation(other, conversation['id']) is None

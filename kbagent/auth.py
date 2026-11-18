@@ -184,6 +184,10 @@ def end_session(token: str | None) -> None:
 # ---------- диалоги ----------
 
 def _safe(login: str) -> str:
+    if login.startswith('ldap:'):
+        # Directory logins can contain punctuation. Preserve distinct histories
+        # when two names (e.g. user.name and user_name) normalize to the same path.
+        return 'ldap-' + hashlib.sha256(login.encode('utf-8')).hexdigest()[:32]
     return re.sub(r"[^\w\-]", "_", login)
 
 
