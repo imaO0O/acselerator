@@ -4,8 +4,13 @@
 сертификат от удостоверяющего центра предприятия: служба ИТ выдаёт PFX, scripts/make_cert.py --pfx переводит его в
 PEM. Для пилота — свой центр сертификации агента (scripts/make_cert.py): он подписывает сертификат на имя и адреса
 сервера; его сертификат data/tls/agent-ca.cer один раз ставится в «Доверенные корневые центры сертификации» на
-компьютерах сотрудников (или групповой политикой), и браузер перестаёт предупреждать. Ключ центра остаётся на
-сервере: сертификат сервера можно перевыпустить (новое имя, срок) без повторной раздачи.
+компьютерах сотрудников (или групповой политикой), и браузер перестаёт предупреждать.
+
+Центр агента ограничен именами и адресами сервера (Name Constraints): даже с украденным ключом центра нельзя
+выпустить сертификат, которому браузеры сотрудников поверят, для другого сайта — почты, портала, банка. Без
+ограничения корневой сертификат в доверенных означал бы возможность перехватывать любой HTTPS сотрудников.
+Перевыпуск на те же имена (продление срока) — без повторной раздачи; новое имя или адрес — новый центр: его
+agent-ca.cer раздаётся заново, прежний удаляется из доверенных. Ключ центра в резервную копию не входит.
 """
 import datetime as dt
 import ipaddress
@@ -46,15 +51,43 @@ def _write(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def _ca():
-    """Центр сертификации агента: создаётся один раз, потом им подписываются сертификаты сервера."""
+def _constraints(names: list[str], ips: list[str]):
+    """Центр может подписывать только эти имена и адреса — ничего другого браузер от него не примет."""
+    from cryptography import x509
+    return x509.NameConstraints(
+        permitted_subtrees=[x509.DNSName(n) for n in names]
+        + [x509.IPAddress(ipaddress.ip_network(f"{i}/{32 if ipaddress.ip_address(i).version == 4 else 128}"))
+           for i in ips], excluded_subtrees=None)
+
+
+def ca_constrained(cert=None) -> tuple[set, set] | None:
+    """Имена и адреса, которыми ограничен центр агента; None — центр без ограничения (выпущен до 31.10.2026)."""
+    from cryptography import x509
+    if cert is None:
+        if not CA_CERT.exists():
+            return None
+        cert = x509.load_pem_x509_certificate(CA_CERT.read_bytes())
+    try:
+        nc = cert.extensions.get_extension_for_class(x509.NameConstraints).value
+    except x509.ExtensionNotFound:
+        return None
+    subtrees = nc.permitted_subtrees or []
+    return ({s.value.lower() for s in subtrees if isinstance(s, x509.DNSName)},
+            {str(s.value.network_address) for s in subtrees if isinstance(s, x509.IPAddress)})
+
+
+def _ca(names: list[str], ips: list[str]):
+    """Центр сертификации агента, ограниченный этими именами и адресами. Прежний центр годится, если он ограничен и
+    покрывает их все; иначе — новый (его agent-ca.cer раздаётся заново)."""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.x509.oid import NameOID
     if CA_CERT.exists() and CA_KEY.exists():
-        return (x509.load_pem_x509_certificate(CA_CERT.read_bytes()),
-                serialization.load_pem_private_key(CA_KEY.read_bytes(), None))
+        cert = x509.load_pem_x509_certificate(CA_CERT.read_bytes())
+        allowed = ca_constrained(cert)
+        if allowed and {n.lower() for n in names} <= allowed[0] and set(ips) <= allowed[1]:
+            return cert, serialization.load_pem_private_key(CA_KEY.read_bytes(), None)
     key = ec.generate_private_key(ec.SECP256R1())
     # в CN не больше 64 байт: кириллица — в названии организации
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"KBAgent CA {socket.gethostname()}"[:64]),
@@ -67,6 +100,7 @@ def _ca():
             .add_extension(x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=False,
                                          data_encipherment=False, key_agreement=False, key_cert_sign=True,
                                          crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
+            .add_extension(_constraints(names, ips), critical=True)
             .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
             .sign(key, hashes.SHA256()))
     _write(CA_KEY, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
@@ -84,12 +118,12 @@ def issue(names: list[str], ips: list[str], days: int = SERVER_DAYS) -> Path:
     from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
     if not names and not ips:
         raise ValueError("нужно хотя бы одно имя или адрес сервера")
-    ca_cert, ca_key = _ca()
+    ca_cert, ca_key = _ca(names, ips)
     key = ec.generate_private_key(ec.SECP256R1())
     now = dt.datetime.now(dt.timezone.utc)
     alt = [x509.DNSName(n) for n in names] + [x509.IPAddress(ipaddress.ip_address(i)) for i in ips]
     cert = (x509.CertificateBuilder()
-            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, (names or ips)[0][:64])]))
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"KBAgent: {(names or ips)[0]}"[:64])]))
             .issuer_name(ca_cert.subject).public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=days))
             .add_extension(x509.SubjectAlternativeName(alt), critical=False)
@@ -136,7 +170,8 @@ def info(path: Path | None = None) -> dict | None:
     own = CA_CERT.exists() and x509.load_pem_x509_certificate(CA_CERT.read_bytes()).subject == cert.issuer
     return {"names": names, "until": until.strftime("%d.%m.%Y"),
             "days_left": (until - dt.datetime.now(dt.timezone.utc)).days,
-            "issuer": cert.issuer.rfc4514_string(), "own_ca": own}
+            "issuer": cert.issuer.rfc4514_string(), "own_ca": own,
+            "ca_unconstrained": own and ca_constrained() is None}
 
 
 def remove() -> None:

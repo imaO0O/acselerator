@@ -12,6 +12,9 @@ def test_directory_login_sessions_fail_closed_and_expire(tmp_settings, monkeypat
     user = auth.authenticate('Ivan', 'secret')
     assert user['login'] == 'ldap:ivan'
     token = auth.create_session(user)
+    sessions = auth._read_sessions()
+    assert token not in sessions
+    assert sessions[auth._token_id(token)]['directory_user']['login'] == user['login']
     assert auth.session_user(token)['provider'] == 'ldap'
     now = auth.time.time()
     monkeypatch.setattr(auth.time, 'time', lambda: now + 301)

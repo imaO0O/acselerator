@@ -118,3 +118,38 @@ def test_index_changed_by_another_process_is_reloaded_not_overwritten(tmp_path, 
     old = time.time() - store.LOCK_STALE - 5
     os.utime(lock, (old, old))                      # блокировка упавшего процесса снимается
     assert a.remove_document("Other", index_dir) > 0 and not lock.exists()
+
+
+def test_folder_documents_wait_for_admin_review(tmp_path, tmp_settings, fake_embed, monkeypatch):
+    """Писать в общую папку может больше людей, чем утверждать регламенты: подложенный «регламент» до проверки
+    администратором — с пометкой «не утверждён» (mark) или виден только ему (hold)."""
+    from kbagent.config import settings
+    from kbagent.ingest import DRAFT
+    from kbagent.uploads import KIND_PENDING
+    src, mirror, index_dir = tmp_path / "share", tmp_path / "raw" / "folder", tmp_path / "index"
+    src.mkdir()
+    regulation(src / "Regl_TKP.docx", "2 рабочих дней")
+    index = empty_index(index_dir)
+
+    folder_sync.sync(index, src, index_dir, mirror)                     # mark — по умолчанию
+    assert {c.doc_kind for c in index.chunks} == {KIND_PENDING} and {c.access for c in index.chunks} == {"all"}
+    assert [d["id"] for d in folder_sync.pending(mirror)] == ["Regl_TKP"]
+    folder_sync.approve(index, "Regl_TKP", "admin", index_dir, mirror)
+    assert {c.doc_kind for c in index.chunks} == {folder_sync.KIND} and folder_sync.pending(mirror) == []
+
+    monkeypatch.setattr(settings, "docs_folder_review", "hold")
+    time.sleep(0.05)
+    regulation(src / "Regl_TKP.docx", "1 рабочего дня")                # изменили в папке — снова на проверку
+    os.utime(src / "Regl_TKP.docx", (time.time() + 5, time.time() + 5))
+    folder_sync.sync(index, src, index_dir, mirror)
+    assert {c.access for c in index.chunks} == {DRAFT} and {c.doc_kind for c in index.chunks} == {KIND_PENDING}
+    folder_sync.approve(index, "Regl_TKP", "admin", index_dir, mirror)
+    assert {c.access for c in index.chunks} == {"all"} and {c.doc_kind for c in index.chunks} == {folder_sync.KIND}
+    with pytest.raises(ValueError, match="не ждёт проверки"):
+        folder_sync.approve(index, "Regl_TKP", "admin", index_dir, mirror)
+
+    monkeypatch.setattr(settings, "docs_folder_review", "off")         # папку пишет только служба документации
+    regulation(src / "Regl_TKP.docx", "3 рабочих дней")
+    os.utime(src / "Regl_TKP.docx", (time.time() + 10, time.time() + 10))
+    folder_sync.sync(index, src, index_dir, mirror)
+    assert {c.doc_kind for c in index.chunks} == {folder_sync.KIND} and folder_sync.pending(mirror) == []

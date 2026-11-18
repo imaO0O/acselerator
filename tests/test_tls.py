@@ -42,13 +42,71 @@ def test_issued_certificate_passes_real_tls_handshake(tls_dir):
     listener.close()
 
 
-def test_reissue_keeps_agent_ca(tls_dir):
-    tls.issue(["localhost"], [])
+def test_reissue_keeps_agent_ca_only_for_same_names(tls_dir):
+    tls.issue(["localhost"], ["127.0.0.1"])
     ca = tls.CA_CERT.read_bytes()
-    tls.issue(["agent.zavod.local"], ["10.0.0.15"])
-    assert tls.CA_CERT.read_bytes() == ca and tls.info()["names"] == ["agent.zavod.local", "10.0.0.15"]
+    tls.issue(["localhost"], ["127.0.0.1"], days=365)                    # продление — без повторной раздачи
+    assert tls.CA_CERT.read_bytes() == ca
+    tls.issue(["agent.zavod.local"], ["10.0.0.15"])                      # новое имя — новый центр
+    assert tls.CA_CERT.read_bytes() != ca and tls.info()["names"] == ["agent.zavod.local", "10.0.0.15"]
+    assert tls.ca_constrained() == ({"agent.zavod.local"}, {"10.0.0.15"})
     tls.remove()
     assert tls.paths() is None and tls.CA_CERT.exists()
+
+
+def test_agent_ca_cannot_vouch_for_other_sites(tls_dir):
+    """Даже с ключом центра агента сертификат «почты» или «банка» браузер не примет — только имена сервера."""
+    import datetime as dt
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
+    tls.issue(["agent.zavod.local"], ["10.0.0.15"])
+    ca = x509.load_pem_x509_certificate(tls.CA_CERT.read_bytes())
+    ca_key = serialization.load_pem_private_key(tls.CA_KEY.read_bytes(), None)
+    now = dt.datetime.now(dt.timezone.utc)
+
+    def leaf(host: str):
+        key = ec.generate_private_key(ec.SECP256R1())
+        return (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]))
+                .issuer_name(ca.subject).public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - dt.timedelta(minutes=1)).not_valid_after(now + dt.timedelta(days=30))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+                .sign(ca_key, hashes.SHA256()))
+
+    def verify(host: str):
+        builder = PolicyBuilder().store(Store([ca])).time(now)
+        return builder.build_server_verifier(x509.DNSName(host)).verify(leaf(host), [])
+
+    assert verify("agent.zavod.local")
+    with pytest.raises(VerificationError):
+        verify("mail.zavod.local")
+    with pytest.raises(VerificationError):
+        verify("online.bank.ru")
+
+
+def test_unconstrained_agent_ca_from_before_is_replaced(tls_dir):
+    import datetime as dt
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())                        # центр, выпущенный до 31.10 — без ограничения
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "KBAgent CA old")])
+    now = dt.datetime.now(dt.timezone.utc)
+    old = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+           .serial_number(1).not_valid_before(now).not_valid_after(now + dt.timedelta(days=3650))
+           .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True).sign(key, hashes.SHA256()))
+    tls.CA_CERT.write_bytes(old.public_bytes(serialization.Encoding.PEM))
+    tls.CA_KEY.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                             serialization.NoEncryption()))
+    assert tls.ca_constrained() is None
+    tls.issue(["localhost"], ["127.0.0.1"])
+    assert tls.ca_constrained() == ({"localhost"}, {"127.0.0.1"}) and not tls.info()["ca_unconstrained"]
 
 
 def test_pfx_from_it_department(tls_dir):

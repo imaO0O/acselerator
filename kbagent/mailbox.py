@@ -34,6 +34,7 @@ STATE = DIR / "state.json"
 PASSWORD_FILE = ROOT / "data" / "mail_password.txt"
 STATUSES = {"новый": "новый", "открыт": "открыт в чате", "не запрос": "не запрос клиента"}
 MAX_LETTER = 6000
+MAX_ATTACHMENT = 15 * 2**20                          # вложение больше — в разбор не идёт, менеджер видит пометку
 
 
 def configured() -> bool:
@@ -93,8 +94,12 @@ def parse_message(raw: bytes) -> dict:
     for part in msg.iter_attachments():
         name = part.get_filename() or ""
         if name.lower().rsplit(".", 1)[-1] in tkp.LETTER_TYPES:
+            data = part.get_payload(decode=True) or b""
+            if len(data) > MAX_ATTACHMENT:                # от внешнего отправителя — не разбираем без предела
+                names.append(f"{name} (больше {MAX_ATTACHMENT // 2**20} МБ — не разбиралось)")
+                continue
             try:
-                attached.append(tkp.letter_text(name, part.get_payload(decode=True) or b""))
+                attached.append(tkp.letter_text(name, data))
                 names.append(name)
             except Exception:  # noqa: BLE001 — повреждённое вложение не мешает разобрать тело письма
                 continue

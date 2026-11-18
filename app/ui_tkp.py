@@ -6,6 +6,7 @@ from app.ui_common import ctx, get_agent, inject_css
 from kbagent import mailbox, prajs, tkp_registry
 from kbagent.actions import log_action
 from kbagent.config import settings
+from kbagent.text import md_external
 
 STATUS_ICONS = {"утверждён": "🟣", "отправлен клиенту": "🔵", "выигран": "🟢", "проигран": "⚪", "отменён": "⚫",
                 "заменён": "◽"}
@@ -48,9 +49,10 @@ def _incoming() -> None:
             st.caption("Новых запросов нет.")
         for m in new[:20]:
             c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
-            c1.markdown(f"**{m['subject'] or 'без темы'}** · {m['sender_name'] or m['sender']}  \n"
-                        f":gray[{m['received'] or m['created']} · {'; '.join(m['positions'])}"
-                        + (f" · вложения: {', '.join(m['attachments'])}" if m["attachments"] else "") + "]")
+            # тема, отправитель и имена вложений — от внешнего отправителя: как простой текст, без ссылок и разметки
+            c1.markdown(f"**{md_external(m['subject'] or 'без темы')}** · {md_external(m['sender_name'] or m['sender'])}  \n"
+                        f":gray[{m['received'] or m['created']} · {md_external('; '.join(m['positions']))}"
+                        + (f" · вложения: {md_external(', '.join(m['attachments']))}" if m["attachments"] else "") + "]")
             if c2.button("Открыть в чате", key=f"mail-open-{m['id']}", type="primary", width="stretch"):
                 _open(m)
             if c3.button("Не запрос", key=f"mail-skip-{m['id']}", type="tertiary", width="stretch"):
@@ -121,7 +123,7 @@ def _attention(records: list[dict]) -> None:
         for k, (number, items) in enumerate(grouped.items()):
             r, kinds = items[0]["record"], [a["kind"] for a in items]
             c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
-            c1.markdown(f"**{number}** · {r['client'] or 'клиент не указан'} · {_money(r['total'])}  \n"
+            c1.markdown(f"**{number}** · {md_external(r['client'] or 'клиент не указан')} · {_money(r['total'])}  \n"
                         f":gray[{'; '.join(a['text'] for a in items)}]")
             if kinds == ["not_sent"]:
                 if c2.button("Отправлен клиенту", key=f"att-sent-{k}", width="stretch",
@@ -142,7 +144,7 @@ def reminder_dialog(number: str) -> None:
     """Черновик письма-напоминания. Ничего не отправляется: менеджер копирует текст в свою почту
     и отмечает «напомнили» — отсчёт молчания клиента начнётся заново."""
     r = next(x for x in tkp_registry.load() if x["number"] == number)
-    st.caption(f"ТКП № {number} · {r['client'] or 'клиент не указан'}. Скопируйте текст в письмо клиенту — "
+    st.caption(f"ТКП № {number} · {md_external(r['client'] or 'клиент не указан')}. Скопируйте текст в письмо клиенту — "
                "автоматически ничего не отправляется.")
     st.text_area("Текст", tkp_registry.reminder_text(r, ctx()["name"]), height=260, key=f"rem-text-{number}",
                  label_visibility="collapsed")
@@ -177,9 +179,9 @@ def _record(numbers: list[str]) -> None:
     with st.container(border=True):
         number = st.selectbox("ТКП", numbers, key="tkp-pick")
         r = next(x for x in tkp_registry.load() if x["number"] == number)
-        st.markdown(f"**{r['number']}** · {r['client'] or 'клиент не указан'} · {_money(r['total'])} · "
+        st.markdown(f"**{r['number']}** · {md_external(r['client'] or 'клиент не указан')} · {_money(r['total'])} · "
                     f"{STATUS_ICONS.get(r['status'], '')} {r['status']}")
-        st.caption(f"Запрос: {r['question']}")
+        st.caption(f"Запрос: {md_external(r['question'])}")
         newer = [x["number"] for x in tkp_registry.load() if x.get("revision_of") == number]
         if r.get("revision_of") or newer:
             st.caption(("Редакция ТКП № " + r["revision_of"] if r.get("revision_of") else "")

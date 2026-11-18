@@ -53,7 +53,11 @@ def main() -> int:
             tls.from_pfx(args.pfx.read_bytes(), getpass.getpass("Пароль PFX (пусто — без пароля): "))
         else:
             names, ips = tls.default_names()
+            before = tls.CA_PUBLIC.read_bytes() if tls.CA_PUBLIC.exists() else None
             tls.issue(list(dict.fromkeys(names + args.name)), list(dict.fromkeys(ips + args.ip)), args.days)
+            if before is not None and tls.CA_PUBLIC.read_bytes() != before:
+                print("Новый центр сертификации агента (ограничен именами и адресами сервера): раздайте "
+                      f"{tls.CA_PUBLIC} заново, а прежний «KBAgent CA» удалите из доверенных на компьютерах сотрудников.")
     except (OSError, ValueError) as e:
         print(f"Не получилось: {e}")
         return 1

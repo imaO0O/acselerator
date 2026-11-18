@@ -57,7 +57,7 @@ class Answer:
 
 def source_label(hit: Hit) -> str:
     c = hit.chunk
-    parts = [c.doc_title + (" (загружен пользователем, не утверждён)" if c.doc_kind == "Загруженный документ" else "")]
+    parts = [c.doc_title + (" (не утверждён администратором)" if c.doc_kind == "Загруженный документ" else "")]
     if c.clause:
         parts.append(f"п. {c.clause}")
     if c.page_start:
@@ -106,6 +106,8 @@ def _strip_clause_refs(text: str) -> str:
     def keep(m):
         nums = [t for t in re.split(r"[,;\s]+", m.group(1)) if re.fullmatch(r"\d{1,2}", t)]
         return f"[{', '.join(nums)}]" if nums else f"(п. {m.group(1).strip()})"
+    # маркер отказа в другом регистре («… [1]. Нет_данных») — тоже отказ, а не текст для сотрудника
+    text = re.sub(r"нет_данных", NO_DATA, text, flags=re.I)
     return CLAUSE_IN_REF_RE.sub(keep, text)
 
 
@@ -320,8 +322,11 @@ def _drop_other_cases(question: str, text: str, hits: list[Hit]) -> tuple[str, i
                 overlap = len(words & set(tokenize(sentence)))
                 if overlap > best_overlap:
                     best, best_overlap = sentence, overlap
-        other = best is not None and any(
-            kind in asked and values and not values & asked[kind] for kind, values in _qualifiers(best).items())
+        # оговорка в скобках («проверка цепи заземления (для электроинструмента класса I)») относится к своему
+        # месту, а не ко всему предложению: «сопротивление изоляции не менее 0,5 МОм» в нём — для любого класса
+        general = re.sub(r"\([^()]*\)", " ", best) if best is not None else None
+        other = general is not None and any(
+            kind in asked and values and not values & asked[kind] for kind, values in _qualifiers(general).items())
         if other:
             dropped += 1
         else:
@@ -487,6 +492,41 @@ REFUSAL_RE = re.compile(
     r"не указан\w*\s+(?:во|в)\s+(?:фрагмент|документ)", re.I)
 
 
+# вопрос о величине («какое сопротивление изоляции…», «какой ток…»): в ответе должно быть число со ссылкой,
+# иначе это пересказ соседних сведений под видом ответа (п. 52: «не менее 0,5 МОм» — а ответ про класс II)
+VALUE_Q_RE = re.compile(r"\b(?:как(?:ое|ой|ая|ие|ова|ов)|сколько)\b[^?]{0,40}?\b(?:сопротивлени|напряжени|ток[аиу]?\b|"
+                        r"температур|частот|размер|масс[аы]?\b|длин|ширин|высот|давлени|мощност|[её]мкост|сечени|"
+                        r"расстояни|погрешност|диапазон|предел|влажност|освещ[её]нност)", re.I)
+# названия кнопок, пунктов меню и режимов латиницей («DISPLAY», «XY Mode») — только те, что есть во фрагменте
+LATIN_TERM_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9+]+(?![A-Za-z0-9])")
+ROMAN_RE = re.compile(r"^[IVXLC]+$")
+
+
+def _has_number(text: str) -> bool:
+    return bool(re.search(r"\d", REF_RE.sub("", text)))
+
+
+def _unsupported_terms(question: str, text: str, hits: list[Hit], cited: list[int]) -> list[str]:
+    """Латинские названия из ответа, которых нет ни в процитированных фрагментах, ни в вопросе."""
+    source = (question + " " + " ".join(hits[n - 1].chunk.text for n in cited)).lower()
+    terms = [t for t in LATIN_TERM_RE.findall(REF_RE.sub("", text)) if not ROMAN_RE.match(t)]
+    return list(dict.fromkeys(t for t in terms if t.lower() not in source))
+
+
+def _retry(messages: list[dict], text: str, hits: list[Hit], instruction: str) -> tuple[str, list[int]] | None:
+    """Одна повторная попытка с прямым указанием, что не так; None — модель не смогла ответить по фрагментам."""
+    try:
+        retry, _ = llm.chat(messages + [{"role": "assistant", "content": text}, {"role": "user", "content": instruction}])
+    except llm.ModelError:
+        return None
+    retry = _strip_clause_refs(retry)
+    valid = _valid_refs(retry, len(hits))
+    retry = _strip_service_lines(_clean_refs(retry, valid))
+    if NO_DATA in retry or not valid or _is_refusal(retry) or _too_short(retry):
+        return None
+    return retry, valid
+
+
 def _is_refusal(text: str) -> bool:
     """«Нет. Во фрагментах нет информации… [1, 2]» — это отказ, оформленный как ответ со ссылками."""
     bare = REF_RE.sub("", text)
@@ -558,6 +598,47 @@ def answer_from_documents(question: str, retrieval: Retrieval, facts: str | None
     text = _strip_service_lines(_clean_refs(text, valid))
     if _is_refusal(text):
         return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
+    known = f"{question} {facts or ''}"        # запись учёта («конденсатор … X7R») модель видела вместе с фрагментами
+    terms = _unsupported_terms(known, text, hits, valid)
+    if terms:
+        # «нажать DISPLAY, выбрать XY Mode» со ссылкой на страницу, где про XY ничего нет: одна попытка строго по
+        # фрагментам — с подсказкой, в каком найденном фрагменте название есть. Не вышло: если фрагмент с названием
+        # подтверждает и саму фразу («1000 В для DCV» — 78 % её слов в нём), ссылка не та — она дополняется этим
+        # фрагментом; если нет («нажать DISPLAY, выбрать XY Mode в меню дисплея» — 29 %: там лишь «XY Mode» в списке
+        # меню) — модель додумала, честный отказ
+        stats["unsupported_terms"] = terms
+        words = set(tokenize(REF_RE.sub("", text)))
+        found = {t: [n for n in range(1, len(hits) + 1) if t.lower() in hits[n - 1].chunk.text.lower()] for t in terms}
+        where = {t: [n for n in found[t] if len(words & set(tokenize(hits[n - 1].chunk.text))) >= 0.5 * len(words)]
+                 for t in terms}
+        invented = [t for t in terms if not where[t]]
+        hint = "; ".join(f"«{t}» — во фрагменте [{', '.join(map(str, found[t][:2]))}]" for t in terms if found[t])
+        again = _retry(messages, text, hits, f"В ответе есть названия, которых нет во фрагментах, на которые ты "
+                                             f"ссылаешься: {', '.join(terms)}. "
+                                             + (f"Где они есть: {hint}. " if hint else "")
+                                             + "Перепиши ответ строго по фрагментам: кнопки, пункты меню и режимы "
+                                             "называй точно как во фрагменте и ставь ссылку [n] на фрагмент, где они "
+                                             f"есть. Если во фрагментах этого нет — ответь {NO_DATA}.")
+        if again is not None and not _unsupported_terms(known, again[0], hits, again[1]):
+            text, valid = again
+            stats["terms_fixed"] = True
+        elif invented:
+            return Answer("model_refused", "В найденных фрагментах ответа нет.", hits=hits, stats=stats)
+        else:
+            extra = sorted({where[t][0] for t in terms} - set(valid))
+            text = text.rstrip() + f" [{', '.join(map(str, extra))}]"
+            valid = sorted(set(valid) | set(extra))
+            stats["refs_repaired"] = extra
+    if VALUE_Q_RE.search(question) and not _has_number(text):
+        # спросили величину, а в ответе нет числа: одна попытка найти значение во фрагментах
+        stats["value_missing"] = True
+        again = _retry(messages, text, hits, "В вопросе спрашивается значение, а в ответе его нет. Если значение "
+                                             "есть во фрагментах — приведи его с единицей измерения и ссылкой [n]. "
+                                             f"Если значения во фрагментах нет — ответь {NO_DATA}.")
+        if again is None or not _has_number(again[0]):
+            return Answer("model_refused", "Значения в найденных фрагментах нет.", hits=hits, stats=stats)
+        text, valid = again
+        stats["value_fixed"] = True
     if PRICE_Q_RE.search(question) and not MONEY_RE.search(text):
         stats["no_price"] = True
         return Answer("model_refused", "В документах нет сведений о стоимости.", hits=hits, stats=stats)

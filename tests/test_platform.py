@@ -18,6 +18,20 @@ def test_sessions_and_conversations(tmp_settings, monkeypatch):
     auth.end_session(token)
     assert auth.session_user(token) is None
 
+    # в файле сеансов — только хэши: файл (журналы, копия диска) не даёт войти под чужой учёткой
+    import threading
+    tokens = []
+    threads = [threading.Thread(target=lambda: tokens.append(auth.create_session({"login": "u"}))) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    stored = (tmp_settings.log_dir / "sessions.json").read_text(encoding="utf-8")
+    assert len(tokens) == 8 and all(t not in stored for t in tokens)
+    assert all(auth.session_user(t) for t in tokens)                      # одновременные входы не потерялись
+    auth.end_user_sessions("u")
+    assert not any(auth.session_user(t) for t in tokens)
+
     conv = auth.new_conversation()
     conv["items"].append({"question": "Какой срок входного контроля?", "text": "5 дней [1]"})
     auth.save_conversation("u", conv)

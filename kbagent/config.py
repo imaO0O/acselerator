@@ -55,6 +55,9 @@ class Settings:
     # папка документов отдела (сетевая или локальная): новые и изменённые файлы подключаются сами — folder_sync
     docs_folder: str = _env("KB_DOCS_FOLDER", "")
     docs_folder_access: str = _env("KB_DOCS_FOLDER_ACCESS", "all")   # доступ документов без записи в реестре
+    # новый или изменённый файл папки до проверки администратором: mark — виден с пометкой «не утверждён»,
+    # hold — виден только администратору, off — сразу как утверждённый (папку пишет только служба документации)
+    docs_folder_review: str = _env("KB_DOCS_FOLDER_REVIEW", "mark")
     log_dir: Path = ROOT / "logs"
     # вход по логину и паролю; KB_AUTH=0 — выбор роли из списка (для отладки)
     auth_required: bool = _env("KB_AUTH", True)

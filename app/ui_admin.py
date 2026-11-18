@@ -10,6 +10,7 @@ import streamlit as st
 from app.ui_common import (ACCESS_LABELS, APP_NAME, ROOT, ROUTE_LABELS, STATUS_LABELS, ctx, get_agent, health,
                            index_meta, inject_css)
 from kbagent import auth
+from kbagent.text import csv_safe, md_plain
 from kbagent.config import settings
 from kbagent.actions import ACTIONS, load_actions
 from kbagent.gaps import find_gaps
@@ -26,7 +27,8 @@ EVAL_USERS = {None, "", "eval"}
 
 
 def _csv(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
+    """Выгрузка в CSV: вопросы и комментарии сотрудников на «=» не становятся формулами в Excel."""
+    return df.map(csv_safe).to_csv(index=False).encode("utf-8-sig")
 
 
 def journal() -> None:
@@ -193,6 +195,21 @@ def docs_folder(agent) -> None:
                 st.warning(last["warning"])
             for name, error in last.get("errors", []):
                 st.error(f"{name}: {error}")
+        waiting = folder_sync.pending()
+        if waiting:
+            hold = settings.docs_folder_review == "hold"
+            st.warning(f"Ждут проверки: {len(waiting)} — новые или изменённые в папке документы. "
+                       + ("До утверждения их видит только администратор." if hold else
+                          "Ответы по ним идут с предупреждением «документ не утверждён»."),
+                       icon=":material/rule:")
+            for d in waiting[:30]:
+                c1, c2 = st.columns([5, 1], vertical_alignment="center")
+                c1.markdown(f"**{md_plain(d.get('title', d['id']))}** · {md_plain(d.get('source_file', ''))}  \n"
+                            f":gray[изменён {d.get('changed_at', '—')}]")
+                if c2.button("Утвердить", key=f"folder-ok-{d['id']}", width="stretch"):
+                    folder_sync.approve(agent.index, d["id"], ctx()["login"])
+                    st.session_state.folder_note = f"Утверждён: {d.get('title', d['id'])}."
+                    st.rerun()
         if st.button("Проверить папку сейчас", icon=":material/sync:", key="folder-sync"):
             with st.spinner("Сверяю папку с базой знаний…"):
                 rep = folder_sync.sync(agent.index, Path(folder), user=ctx()["login"])
@@ -348,6 +365,7 @@ def reference() -> None:
             st.rerun()
         if note := st.session_state.pop("spr_note", None):
             getattr(st, note[0])(note[1])
+    spravochnik_draft_box(values)
     if values:
         df = pd.DataFrame([{"Модель": v.model, "Вид": v.kind, "Параметр": v.param, "Значение": v.shown(),
                             "Документ": v.doc, "Страница": v.page} for v in values])
@@ -358,6 +376,71 @@ def reference() -> None:
         st.download_button("Скачать справочник (CSV)", spravochnik.PATH.read_bytes(), file_name="spravochnik.csv",
                            icon=":material/download:", key="spr-dl")
     price_list()
+
+
+def spravochnik_draft_box(values: list) -> None:
+    """Черновик справочника из руководства: программа предлагает значения с цитатой и страницей, эксперт отмечает."""
+    from kbagent import spravochnik_draft as draft
+    with st.container(border=True):
+        st.markdown("**Черновик из руководства**")
+        st.caption("Программа находит в руководстве характеристики, которые знает справочник, и предлагает по каждой "
+                   "модели одно значение — со страницей и цитатой; рядом — другие значения из текста. Проверьте по "
+                   "цитате, исправьте при необходимости и отметьте «Добавить»: в справочник попадёт только отмеченное, "
+                   "с той же проверкой, что и файл. На демо программа сама находит 83 % значений, внесённых вручную (86 из 104).")
+        chunks: dict[str, list] = {}
+        titles: dict[str, str] = {}
+        for c in get_agent().index.chunks:
+            if c.doc_kind == "Руководство по эксплуатации":
+                chunks.setdefault(c.doc_id, []).append(c)
+                titles[c.doc_id] = c.doc_title
+        if not chunks:
+            st.caption("В базе знаний нет руководств по эксплуатации.")
+            return
+        have: dict[str, list] = {}
+        for v in values:
+            have.setdefault(v.doc, []).append(v)
+        c1, c2 = st.columns([3, 1])
+        doc = c1.selectbox("Руководство", sorted(chunks, key=lambda d: (d in have, titles[d])), key="draft-doc",
+                           format_func=lambda d: titles[d][:90] + (f" — в справочнике {len(have[d])}" if d in have else
+                                                                   " — в справочнике нет"))
+        kinds = list(draft.KIND_PARAMS)
+        guess = draft.kind_of(titles[doc])
+        kind = c2.selectbox("Вид", kinds, index=kinds.index(guess) if guess in kinds else 0, key=f"draft-kind-{doc}")
+        known = list(dict.fromkeys(v.model for v in have.get(doc, [])))
+        models = st.text_input("Модели через запятую — как в прайсе и в письмах клиентов", key=f"draft-models-{doc}",
+                               value=", ".join(known or draft.models_from_title(titles[doc])))
+        if st.button("Найти характеристики", icon=":material/manage_search:", key="draft-run"):
+            names = [m.strip() for m in models.split(",") if m.strip()]
+            pages = sorted(chunks[doc], key=lambda c: c.page_start or 0)
+            st.session_state.spr_draft = (doc, draft.candidates(pages, names, kind))
+        made = st.session_state.get("spr_draft")
+        if not made or made[0] != doc:
+            return
+        rows = made[1]
+        if not rows:
+            st.info("Характеристик, которые знает справочник, в тексте руководства не нашлось.")
+            return
+        df = pd.DataFrame([{"Добавить": False, **r} for r in rows])
+        edited = st.data_editor(
+            df, hide_index=True, width="stretch", key=f"draft-table-{doc}",
+            disabled=["Модель", "Вид", "Параметр", "Страница", "Цитата", "Другие значения в тексте"],
+            column_config={"Добавить": st.column_config.CheckboxColumn("Добавить"),
+                           "Цитата": st.column_config.TextColumn("Цитата", width="large"),
+                           "Другие значения в тексте": st.column_config.TextColumn("Другие значения в тексте",
+                                                                                   width="medium")})
+        chosen = edited[edited["Добавить"]].drop(columns=["Добавить"]).to_dict("records")
+        if st.button(f"Добавить отмеченные в справочник: {len(chosen)}", type="primary", disabled=not chosen,
+                     icon=":material/playlist_add_check:", key="draft-add"):
+            try:
+                rep = draft.add_rows(chosen, doc)
+                log_action("spravochnik_draft", ctx()["login"], doc, f"добавлено строк: {len(chosen)}; "
+                                                                     f"противоречий: {len(rep.contradictions)}")
+                st.session_state.spr_note = ("success", f"Добавлено в справочник: {len(chosen)}. Всего значений: "
+                                                        f"{rep.values}, противоречий: {len(rep.contradictions)}.")
+                st.session_state.pop("spr_draft", None)
+            except ValueError as e:
+                st.session_state.spr_note = ("error", str(e))
+            st.rerun()
 
 
 def price_list() -> None:

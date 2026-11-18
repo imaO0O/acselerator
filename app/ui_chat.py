@@ -103,7 +103,7 @@ def sidebar() -> str:
             for c in shown[:40]:
                 active = c["id"] == conv["id"]
                 left, right = box.columns([7, 1], vertical_alignment="center", gap="small")
-                if left.button(c["title"], key=f"conv-{c['id']}", type="secondary" if active else "tertiary",
+                if left.button(md_plain(c["title"]), key=f"conv-{c['id']}", type="secondary" if active else "tertiary",
                                width="stretch", help=c["updated"]):
                     st.session_state.conv = auth.load_conversation(_key(), c["id"]) or auth.new_conversation()
                     st.rerun()
@@ -388,8 +388,9 @@ def render_answer(item: dict, i: int) -> None:
         if item["route"] in ("documents", "both"):
             st.button("Переспросить", key=f"reask-{uid}", icon=":material/refresh:", on_click=_ask,
                       args=(item["question"],))
-    if any(s.get("doc_kind") == KIND_PENDING for s in cited):
-        st.warning("Ответ опирается на документ, загруженный пользователем и ещё не утверждённый.",
+    if any(s.get("doc_kind") == KIND_PENDING for s in cited):  # загружен через чат или изменён в папке отдела
+        st.warning("Ответ опирается на документ, ещё не утверждённый администратором (загружен через чат "
+                   "или изменён в папке отдела) — сверьте с действующей редакцией.",
                    icon=":material/pending:")
 
     if item.get("rows"):

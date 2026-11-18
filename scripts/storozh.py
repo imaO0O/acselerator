@@ -1,7 +1,7 @@
 """Сторож: один проход — что из моделей, чата и REST API не отвечает, то запускается (kbagent/watchdog.py).
 
-    python scripts/watchdog.py            проверить и перезапустить упавшее
-    python scripts/watchdog.py --status   только показать, что работает
+    python scripts/storozh.py             проверить и перезапустить упавшее
+    python scripts/storozh.py  --status   только показать, что работает
 
 По расписанию его запускает задача KBAgent-watchdog (scripts/install_tasks.bat): при входе в Windows и каждые
 2 минуты. Режим моделей — KB_MODEL_MODE в data/settings.env: gpu (по умолчанию), smallgpu, cpu.

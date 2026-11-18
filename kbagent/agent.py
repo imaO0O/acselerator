@@ -66,6 +66,7 @@ RULE_RE = re.compile(r"можно ли|можно\b|нужно ли|надо л�
                      r"в какой срок|в течение какого|за какое время|в каком порядке|длится|как (?:быстро|скоро)|"
                      r"через (?:сколько|какое время)|за сколько (?:дней|часов|минут|суток|недель|месяцев)\b|"
                      r"уведомля\w*|сколько действует|срок действия|"
+                     r"сколько\s+(?:времени\s+)?(?:хран|длит|действу)\w*|срок\w*\s+хранени\w*|как долго|"
                      r"сколько\s[^?]*\b(?:осмотреть|проверить|отобрать|испытать|проконтролировать)\b|"
                      r"сколько стоит|стоимост|\bцен[аыуе]\b|расценк|тариф|"
                      r"сколько\s[^?]*\b(?:нужно|надо|следует|требуется)\b|"     # «сколько штук нужно осмотреть» — расчёт по правилу
@@ -172,6 +173,14 @@ META_RE = re.compile(
 # «Что делать?», «Куда звонить?» без предмета и без предыдущего вопроса — встречный вопрос
 VAGUE_RE = re.compile(r"^\s*(?:а\s+|и\s+)?(?:что|как|куда|кому|где)\s+(?:мне\s+|нам\s+)?(?:делать|быть|поступить|"
                       r"звонить|сообщать|обращаться|идти|смотреть)\s*[?!.]*\s*$", re.I)
+TOPIC_ONLY_RE = re.compile(r"^\s*(?:а\s+|и\s+)?(?:расскажи(?:те)?|что (?:известно|есть|знаешь)|информаци\w*|"
+                           r"всё|все)\s+(?:мне\s+)?(?:про|о|об|по)\s+\S+(?:\s+\S+)?\s*[?!.]*\s*$", re.I)
+# цена или наличие названной модели — из прайса (или 1С) программой, для техпродаж и администратора
+PRICE_ASK_RE = re.compile(r"сколько стоит|стоимост|\bцен[аыуе]\b|почём|почем|\bв наличии\b|\bналичи[еия]\b|"
+                          r"срок\w* поставки", re.I)
+# «Сколько стоит калибровка MAS830L?» — цена услуги, а не прибора: в прайсе её нет, ответ — не из прайса
+SERVICE_RE = re.compile(r"калибров|поверк|ремонт|доставк|обучени|настройк|монтаж|пусконаладк|обслуживани|"
+                        r"диагностик|гаранти|услуг|аренд", re.I)
 SHORTEN_PROMPT = """Сотрудник задал длинный вопрос помощнику по документам предприятия.
 Сформулируй суть одним коротким вопросом (до 20 слов): что именно он хочет узнать. Сохрани все условия,
 предметы и номера (оборудование, категории, номера записей); если вопросов несколько — сохрани все.
@@ -751,6 +760,40 @@ class Agent:
         combined.asked = asked if asked != question else None
         return combined
 
+    def answer_price(self, question: str, asked: str, role: str) -> AgentResult | None:
+        """Цена и наличие названных моделей — из прайса (загруженного файлом или из 1С), без языковой модели.
+        Модель не названа («Сколько стоит поверка осциллографа?») — не сюда: в прайсе только продукция."""
+        from . import prajs
+        values, _ = spravochnik.load()
+        models = spravochnik._find_models(asked, values)
+        if not models:
+            return None
+        prices, _ = prajs.load()
+        if not prices:
+            text = ("Прайс для ТКП не загружен — цены и сроки поставки вписывает менеджер. Загрузить прайс или "
+                    "подключить цены из 1С — «Администрирование» → «Справочник» → «Прайс для ТКП».")
+            return AgentResult(question, role, "prajs", "no_data", text, stats={"prajs": True})
+        vat = (f"с НДС {settings.vat_rate:g} %" if settings.prices_include_vat else "без НДС") if settings.vat_rate \
+            else "НДС не облагается"
+        lines, dates, notes = [], set(), set()
+        for m in models[:8]:
+            p = prices.get(m)
+            if p is None:
+                lines.append(f"- **{m}** — цены в прайсе нет")
+                continue
+            dates.add(prajs.shown_date(p.since))
+            notes |= {"ДЕМО — цены вымышленные"} if p.demo else set()
+            notes |= {f"прайс старше {prajs.STALE_DAYS} дней — проверьте цену"} if p.stale else set()
+            lines.append(f"- **{m}** — {prajs.money(p.price)} за шт. ({vat})"
+                         + (f", срок поставки — {p.lead}" if p.lead else ", срок поставки в прайсе не указан"))
+        if len(models) > 8:
+            lines.append(f"- и ещё моделей: {len(models) - 8} — уточните модель")
+        head = f"По прайсу от {', '.join(sorted(dates))}" if dates else "В прайсе"
+        text = (head + (f" ({'; '.join(sorted(notes))})" if notes else "") + ":\n" + "\n".join(lines)
+                + "\n\nЦену и наличие подтверждает менеджер; предложение клиенту — «Черновик ТКП» по его письму. [прайс]")
+        status = "answer" if dates else "no_data"
+        return AgentResult(question, role, "prajs", status, text, stats={"prajs": True, "models": models})
+
     def search_baseline(self, question: str, role: str, top: int = 5, user: str | None = None) -> dict:
         """Что выдал бы обычный поиск по словам: документы (без ответа) и сколько в них страниц —
         для сравнения на показе. Без моделей, за миллисекунды."""
@@ -832,6 +875,15 @@ class Agent:
         elif len(base.split()) > LONG_QUESTION_WORDS:
             step("Выделяю суть вопроса…")
             asked = self.shorten(base)
+        # «Сколько стоит АКИП-4143/1?», «Есть ли в наличии DT9205A?» — из прайса программой
+        if (route in ("auto", "spravochnik") and role in settings.tkp_roles and PRICE_ASK_RE.search(asked)
+                and not SERVICE_RE.search(asked)):
+            price = self.answer_price(question, asked, role)
+            if price is not None:
+                price.seconds = round(time.time() - t0, 2)
+                if log:
+                    self._log(price, user)
+                return price
         # параметры продукции («полоса АКИП-4115/2В», «подойдёт ли MAS830L для 15 А», «осциллограф от 150 МГц
         # и 4 канала») — из справочника: точное значение, единица и источник; сравнение и подбор — программой
         if route in ("auto", "spravochnik") and not RECORD_RE.search(asked):
@@ -839,6 +891,9 @@ class Agent:
             if query is not None:
                 step("Сверяю со справочником параметров…")
                 s = spravochnik.answer(query, allowed, question=asked, user=user, role=role)
+                if s is not None and s.status == "no_data":
+                    step("В справочнике нет — ищу в руководствах…")
+                    s = None
                 if s is not None:
                     result = AgentResult(question, role, "spravochnik", s.status, s.text, sources=s.sources,
                                          columns=s.columns, rows=s.rows, labels=s.labels, stats=s.stats)
@@ -859,7 +914,8 @@ class Agent:
                     self._log(calc, user)
                 return calc
         # «Что делать?» или одно слово («Поверка») — встречный вопрос с вариантами, а не случайный ответ
-        vague = route == "auto" and (VAGUE_RE.match(asked) or (len(asked.split()) == 1 and not RECORD_RE.search(asked)))
+        vague = route == "auto" and (VAGUE_RE.match(asked) or TOPIC_ONLY_RE.match(asked)
+                                     or (len(asked.split()) == 1 and not RECORD_RE.search(asked)))
 
         auto = route == "auto"
         result = db_result = a_db = None
