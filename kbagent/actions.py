@@ -42,6 +42,8 @@ ACTIONS = {
     "spravochnik": "Загрузка справочника параметров",
     "prajs": "Загрузка прайса",
     "prajs_1c": "Цены из 1С",
+    "trade_import": "Загрузка торгового каталога",
+    "trade_review": "Проверка торгового подбора",
     "pilot_report": "Отчёт о пилоте",
     "expert": "Решение эксперта",
     "expert_sent": "Вопрос передан эксперту",
@@ -56,6 +58,9 @@ def _path():
 
 def log_action(action: str, user: str | None, target: str = "", details: str = "") -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
+    if settings.log_mask_pii:
+        from .privacy import mask
+        target, details = mask(target), mask(details)
     record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "action": action, "user": user or "—",
               "target": target, "details": details}
     with open(_path(), "a", encoding="utf-8") as f:

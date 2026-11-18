@@ -15,9 +15,11 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import socket
 import subprocess
 import time
+import tempfile
 import zipfile
 from contextlib import nullcontext
 from pathlib import Path
@@ -27,7 +29,7 @@ from .config import ROOT
 # что принадлежит заказчику; пути — от корня установки
 STATE = ["logs", "data/settings.env", "data/tls", "data/users.yaml", "data/api_keys.yaml", "data/model_api_key.txt", "data/index",
          "data/raw/uploaded", "data/raw/folder", "data/raw/partner", "data/spravochnik/pribory.csv",
-         "data/spravochnik/prajs.csv", "data/spravochnik/prajs_1c.json", "data/glossary.yaml", "data/pravila_raschetov.yaml", "data/tkp", "data/mail"]
+         "data/spravochnik/prajs.csv", "data/spravochnik/prajs_1c.json", "data/glossary.yaml", "data/pravila_raschetov.yaml", "data/tkp", "data/mail", "data/trade"]
 SKIP = (".lock", ".tmp")                         # блокировка и недописанные файлы индекса
 PORTS = {8501: "чат", 8000: "REST API"}
 
@@ -68,7 +70,21 @@ def create(root: Path = ROOT, out_dir: Path | None = None, keep: int = 10) -> Pa
         with _lock(index_dir) if index_dir.exists() else nullcontext():
             for f in _files(root):
                 rel = f.relative_to(root).as_posix()
-                data = f.read_bytes()
+                if f.name.endswith(('-wal', '-shm', '-journal')):
+                    continue  # SQLite backup below includes committed WAL pages.
+                if f.suffix == '.sqlite':
+                    with tempfile.TemporaryDirectory(prefix='kb-snapshot-') as scratch:
+                        snap = Path(scratch) / 'snapshot.sqlite'
+                        source = sqlite3.connect(f.resolve().as_uri() + '?mode=ro', uri=True)
+                        target = sqlite3.connect(snap)
+                        try:
+                            source.backup(target)
+                        finally:
+                            target.close()
+                            source.close()
+                        data = snap.read_bytes()
+                else:
+                    data = f.read_bytes()
                 z.writestr(rel, data)
                 manifest["files"][rel] = _sha(data)
         manifest["paths"] = [rel for rel in STATE if (root / rel).exists()]

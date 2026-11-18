@@ -1,0 +1,415 @@
+{
+  "demo": true,
+  "label": "ДЕМО: синтетические данные, не доказательство реальной применимости",
+  "offline": true,
+  "cases": [
+    "agri",
+    "auto",
+    "drawings"
+  ],
+  "imports": [
+    {
+      "case": "agri",
+      "imported": 3,
+      "rejected": 0
+    },
+    {
+      "case": "auto",
+      "imported": 3,
+      "rejected": 0
+    },
+    {
+      "case": "drawings",
+      "imported": 3,
+      "rejected": 0
+    }
+  ],
+  "metrics": {
+    "exact_accuracy": {
+      "correct": 5,
+      "total": 5,
+      "value": 1.0
+    },
+    "cross_candidate_coverage": {
+      "correct": 3,
+      "total": 3,
+      "value": 1.0
+    },
+    "description_candidate_coverage": {
+      "correct": 5,
+      "total": 5,
+      "value": 1.0
+    },
+    "drawing_text_article_accuracy": {
+      "correct": 1,
+      "total": 1,
+      "value": 1.0
+    },
+    "no_data_accuracy": {
+      "correct": 3,
+      "total": 3,
+      "value": 1.0
+    }
+  },
+  "passed": true,
+  "failed_checks": 0,
+  "checks": [
+    {
+      "case": "agri",
+      "source": "catalog.csv",
+      "kind": "import",
+      "passed": true
+    },
+    {
+      "case": "agri",
+      "source": "request.csv",
+      "line": 1,
+      "kind": "exact",
+      "query": "DЕМО‑АG‑001",
+      "expected_articles": [
+        "DEMO-AG-001"
+      ],
+      "selected_article": "DEMO-AG-001",
+      "candidates": [
+        {
+          "article": "DEMO-AG-001",
+          "match_type": "exact"
+        }
+      ],
+      "status": "exact",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "exact_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "agri",
+      "source": "request.csv",
+      "line": 2,
+      "kind": "cross",
+      "query": "DEMO-XAG-102",
+      "expected_articles": [
+        "DEMO-AG-002"
+      ],
+      "selected_article": null,
+      "candidates": [
+        {
+          "article": "DEMO-AG-002",
+          "match_type": "cross"
+        }
+      ],
+      "status": "review",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "cross_candidate_coverage",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "agri",
+      "source": "request.csv",
+      "line": 3,
+      "kind": "description",
+      "query": "втулка шарнира",
+      "expected_articles": [
+        "DEMO-AG-002",
+        "DEMO-AG-003"
+      ],
+      "selected_article": null,
+      "candidates": [
+        {
+          "article": "DEMO-AG-002",
+          "match_type": "description"
+        },
+        {
+          "article": "DEMO-AG-003",
+          "match_type": "description"
+        }
+      ],
+      "status": "review",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "description_candidate_coverage",
+      "correct": 2,
+      "total": 2
+    },
+    {
+      "case": "agri",
+      "source": "request.csv",
+      "line": 4,
+      "kind": "unknown",
+      "query": "квантовый телепортатор",
+      "expected_articles": [],
+      "selected_article": null,
+      "candidates": [],
+      "status": "not_found",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "no_data_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "auto",
+      "source": "catalog.csv",
+      "kind": "import",
+      "passed": true
+    },
+    {
+      "case": "auto",
+      "source": "request.csv",
+      "line": 1,
+      "kind": "exact",
+      "query": "DЕМО–АU–001",
+      "expected_articles": [
+        "DEMO-AU-001"
+      ],
+      "selected_article": "DEMO-AU-001",
+      "candidates": [
+        {
+          "article": "DEMO-AU-001",
+          "match_type": "exact"
+        }
+      ],
+      "status": "exact",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "exact_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "auto",
+      "source": "request.csv",
+      "line": 2,
+      "kind": "cross",
+      "query": "DEMO-XAU-102",
+      "expected_articles": [
+        "DEMO-AU-002"
+      ],
+      "selected_article": null,
+      "candidates": [
+        {
+          "article": "DEMO-AU-002",
+          "match_type": "cross"
+        }
+      ],
+      "status": "review",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "cross_candidate_coverage",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "auto",
+      "source": "request.csv",
+      "line": 3,
+      "kind": "description",
+      "query": "колодка тормозная",
+      "expected_articles": [
+        "DEMO-AU-002",
+        "DEMO-AU-003"
+      ],
+      "selected_article": null,
+      "candidates": [
+        {
+          "article": "DEMO-AU-002",
+          "match_type": "description"
+        },
+        {
+          "article": "DEMO-AU-003",
+          "match_type": "description"
+        }
+      ],
+      "status": "review",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "description_candidate_coverage",
+      "correct": 2,
+      "total": 2
+    },
+    {
+      "case": "auto",
+      "source": "request.csv",
+      "line": 4,
+      "kind": "unknown",
+      "query": "антигравитационный двигатель",
+      "expected_articles": [],
+      "selected_article": null,
+      "candidates": [],
+      "status": "not_found",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "no_data_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "drawings",
+      "source": "catalog.csv",
+      "kind": "import",
+      "passed": true
+    },
+    {
+      "case": "drawings",
+      "source": "request.csv",
+      "line": 1,
+      "kind": "exact",
+      "query": "DЕМО—DR—001",
+      "expected_articles": [
+        "DEMO-DR-001"
+      ],
+      "selected_article": "DEMO-DR-001",
+      "candidates": [
+        {
+          "article": "DEMO-DR-001",
+          "match_type": "exact"
+        }
+      ],
+      "status": "exact",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "exact_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "drawings",
+      "source": "request.csv",
+      "line": 2,
+      "kind": "cross",
+      "query": "DEMO-XDR-102",
+      "expected_articles": [
+        "DEMO-DR-002"
+      ],
+      "selected_article": null,
+      "candidates": [
+        {
+          "article": "DEMO-DR-002",
+          "match_type": "cross"
+        }
+      ],
+      "status": "review",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "cross_candidate_coverage",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "drawings",
+      "source": "request.csv",
+      "line": 3,
+      "kind": "description",
+      "query": "втулка опорная",
+      "expected_articles": [
+        "DEMO-DR-003"
+      ],
+      "selected_article": null,
+      "candidates": [
+        {
+          "article": "DEMO-DR-003",
+          "match_type": "description"
+        }
+      ],
+      "status": "review",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "description_candidate_coverage",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "drawings",
+      "source": "request.csv",
+      "line": 4,
+      "kind": "unknown",
+      "query": "фотонный стабилизатор",
+      "expected_articles": [],
+      "selected_article": null,
+      "candidates": [],
+      "status": "not_found",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "no_data_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "drawings",
+      "source": "drawing.pdf",
+      "kind": "drawing_fields",
+      "actual": {
+        "designation": "DEMO-DR-001",
+        "name": "ДЕМО узел опоры",
+        "material": "ДЕМО сталь С0 (вымышленная)",
+        "mass": "1,25 кг (ДЕМО)"
+      },
+      "expected": {
+        "designation": "DEMO-DR-001",
+        "name": "ДЕМО узел опоры",
+        "material": "ДЕМО сталь С0 (вымышленная)",
+        "mass": "1,25 кг (ДЕМО)"
+      },
+      "passed": true
+    },
+    {
+      "case": "drawings",
+      "source": "drawing.pdf",
+      "kind": "drawing_article",
+      "metric": "drawing_text_article_accuracy",
+      "correct": 1,
+      "total": 1,
+      "selected_article": "DEMO-DR-001",
+      "passed": true
+    },
+    {
+      "case": "drawings",
+      "source": "drawing.pdf",
+      "line": 1,
+      "kind": "exact",
+      "query": "DEMO-DR-002",
+      "expected_articles": [
+        "DEMO-DR-002"
+      ],
+      "selected_article": "DEMO-DR-002",
+      "candidates": [
+        {
+          "article": "DEMO-DR-002",
+          "match_type": "exact"
+        }
+      ],
+      "status": "exact",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "exact_accuracy",
+      "correct": 1,
+      "total": 1
+    },
+    {
+      "case": "drawings",
+      "source": "drawing.pdf",
+      "line": 2,
+      "kind": "exact",
+      "query": "DEMO-DR-003",
+      "expected_articles": [
+        "DEMO-DR-003"
+      ],
+      "selected_article": "DEMO-DR-003",
+      "candidates": [
+        {
+          "article": "DEMO-DR-003",
+          "match_type": "exact"
+        }
+      ],
+      "status": "exact",
+      "quantity_ok": true,
+      "passed": true,
+      "metric": "exact_accuracy",
+      "correct": 1,
+      "total": 1
+    }
+  ]
+}

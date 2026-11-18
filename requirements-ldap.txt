@@ -1,0 +1,2 @@
+# Optional directory deployments only; install from the offline dependency bundle.
+ldap3>=2.9,<3

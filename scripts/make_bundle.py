@@ -45,6 +45,9 @@ if errorlevel 1 (
 echo Окружение Python и пакеты из папки wheels...
 python -m venv agent\.venv || goto :error
 agent\.venv\Scripts\python -m pip install --no-index --find-links wheels -r agent\requirements.txt -c requirements.lock || goto :error
+if exist ldap.enabled (
+    agent\.venv\Scripts\python -m pip install --no-index --find-links wheels -r agent\requirements-ldap.txt -c requirements.lock || goto :error
+)
 
 where nvidia-smi >nul 2>nul
 if errorlevel 1 (
@@ -80,8 +83,8 @@ exit /b 1
 
 README = """Установка AI-агента на компьютер без доступа в интернет
 
-1. Проверьте целостность после переноса (по желанию службы безопасности):
-   certutil -hashfile <файл> SHA256 — сравните с SHA256SUMS.txt.
+1. Проверьте целостность после переноса доверенной копией scripts\\verify_bundle.py:
+   python verify_bundle.py --root D:\\agent_bundle
 2. Запустите install.bat. Он поставит Python 3.12 (если его нет), создаст окружение agent\\.venv,
    установит пакеты из папки wheels и выберет сборку llama.cpp: для видеокарты NVIDIA или для процессора.
    Интернет не нужен.
@@ -136,6 +139,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Поставка для закрытого контура")
     ap.add_argument("out", type=Path, help="папка поставки")
     ap.add_argument("--no-models", action="store_true", help="без моделей (проверить сборку и установку)")
+    ap.add_argument("--with-ldap", action="store_true", help="включить пакеты для LDAPS в офлайн-поставку")
     args = ap.parse_args()
     out, agent = args.out, args.out / "agent"
     out.mkdir(parents=True, exist_ok=True)
@@ -165,8 +169,16 @@ def main() -> None:
                             text=True, check=True).stdout.splitlines()
     lock = out / "requirements.lock"
     lock.write_text("".join(f"{line}\n" for line in frozen if "==" in line and " @ " not in line), encoding="utf-8")
-    subprocess.run([sys.executable, "-m", "pip", "download", "-q", "-r", str(ROOT / "requirements.txt"),
+    requirements = ["-r", str(ROOT / "requirements.txt")]
+    if args.with_ldap:
+        requirements += ["-r", str(ROOT / "requirements-ldap.txt")]
+    subprocess.run([sys.executable, "-m", "pip", "download", "-q", *requirements,
                     "-c", str(lock), "-d", str(out / "wheels")], check=True)
+    ldap_marker = out / "ldap.enabled"
+    if args.with_ldap:
+        ldap_marker.write_text("Install optional LDAPS packages from wheels.\n", encoding="utf-8")
+    else:
+        ldap_marker.unlink(missing_ok=True)
     fetch(PYTHON_URL, out / "python-3.12.exe")
 
     (out / "install.bat").write_text(INSTALL_BAT, encoding="utf-8")

@@ -109,6 +109,21 @@ def gaps() -> None:
 
 
 def security() -> None:
+    from kbagent import directory_settings, index_crypto, security_export
+    status = index_crypto.status(settings.index_dir)
+    st.caption('Вход через LDAPS: ' + ('включён, повторный вход каждые 5 минут' if directory_settings.enabled() else 'не настроен')
+               + '. Шифрование RAG-индекса: ' + ('AES-256-GCM' if status['encryption'] else 'не включено')
+               + '. Шифрование индекса не распространяется на исходные документы и торговые таблицы.')
+    if settings.auth_required and st.session_state.get('token'):
+        with st.expander('Выгрузка журналов для службы безопасности'):
+            for filename, label in [('actions.jsonl', 'Журнал действий'), ('audit.jsonl', 'Журнал запросов')]:
+                try:
+                    data = security_export.export_csv(filename, session_token=st.session_state.token)
+                    st.download_button(label + ' в CSV', data, file_name=filename.replace('.jsonl', '.csv'), key='security-' + filename)
+                except FileNotFoundError:
+                    st.caption(label + ': ещё нет записей.')
+                except (PermissionError, ValueError, OSError) as e:
+                    st.warning(str(e))
     records = load_actions()
     st.caption("Кто, что и когда сделал: входы и неудачные попытки входа, загрузка, утверждение и удаление "
                "документов, выдача ключей API. Журнал только дописывается; хранится в logs/actions.jsonl на сервере.")

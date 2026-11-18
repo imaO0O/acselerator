@@ -167,7 +167,7 @@ def export_xlsx(positions: list[dict], *, customer='', prices_include_vat=True) 
     book = Workbook()
     sheet = book.active
     sheet.title = "Предложение"
-    widths = {"line": 7, "query": 48, "status": 27, "qty": 14, "article": 22,
+    widths = {"line": 12, "query": 48, "status": 27, "qty": 14, "article": 22,
               "name": 48, "brand": 22, "source": 42, "source_row": 18,
               "offered": 24}
     for column, (key, _) in enumerate(FIELDS, 1):

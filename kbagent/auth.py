@@ -88,6 +88,18 @@ def authenticate(login: str, password: str) -> dict | None:
     login = login.strip().lower()
     if locked_for(login):
         return None
+    from . import directory_settings
+    if directory_settings.enabled():
+        from .directory_auth import authenticate as directory_login, DirectoryConfigurationError
+        try:
+            identity = directory_login(directory_settings.load(), login, password)
+        except DirectoryConfigurationError:
+            identity = None
+        _register(login, identity is not None)
+        if identity is None:
+            return None
+        return {'login': 'ldap:' + identity.login.casefold(), 'name': identity.name, 'role': identity.role,
+                'must_change': False, 'provider': 'ldap'}
     user = load_users().get(login)
     if not _DUMMY_HASH:
         _DUMMY_HASH.append(hash_password(secrets.token_hex(8)))
@@ -126,6 +138,8 @@ def create_session(user: dict) -> str:
     token = secrets.token_urlsafe(32)
     sessions = _read_sessions()
     sessions[token] = {"login": user["login"], "created": time.time()}
+    if user.get('provider') == 'ldap':
+        sessions[token]['directory_user'] = {k: user[k] for k in ('login', 'name', 'role', 'provider', 'must_change')}
     _write_sessions(sessions)
     return token
 
@@ -136,6 +150,20 @@ def session_user(token: str | None) -> dict | None:
     s = _read_sessions().get(token)
     if not s or time.time() - s["created"] >= SESSION_TTL:
         return None
+    from . import directory_settings
+    if 'directory_user' in s:
+        # No directory passwords are retained. Reauthenticate at most every five
+        # minutes so revocation/group changes cannot leave a 12-hour session.
+        identity = s['directory_user']
+        if not directory_settings.enabled() or time.time() - s['created'] >= 300 or identity.get('role') not in settings.roles:
+            return None
+        try:
+            directory_settings.load()
+        except ValueError:
+            return None
+        return identity
+    if directory_settings.enabled():
+        return None  # Never revive a local session after switching to LDAPS.
     u = load_users().get(s["login"])
     return _public(u) if u and u.get("active", True) else None     # заблокирован или удалён — сеанс недействителен
 

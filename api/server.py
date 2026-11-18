@@ -59,6 +59,11 @@ def client(x_api_key: str | None = Header(None, description="Ключ досту
     raise HTTPException(401, "Неверный ключ доступа")
 
 
+from api.trade import build_router  # noqa: E402
+
+app.include_router(build_router(client))
+
+
 class Turn(BaseModel):
     question: str = Field(..., max_length=1000)
     answer: str = Field("", max_length=8000)

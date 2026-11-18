@@ -18,7 +18,8 @@ from app.ui_admin import admin_page  # noqa: E402
 from app.ui_chat import chat_page  # noqa: E402
 from app.ui_common import APP_NAME, LOGO, inject_css  # noqa: E402
 from app.ui_tkp import registry_page  # noqa: E402
-from kbagent import auth, users  # noqa: E402
+from app.ui_trade import trade_page  # noqa: E402
+from kbagent import auth, users, directory_settings  # noqa: E402
 from kbagent.actions import log_action  # noqa: E402
 from kbagent.config import settings  # noqa: E402
 
@@ -44,6 +45,9 @@ def current_user() -> dict | None:
         if fresh is None:
             for k in ("user", "token", "conv", "ctx"):
                 st.session_state.pop(k, None)
+            for k in list(st.session_state):
+                if str(k).startswith('trade'):
+                    st.session_state.pop(k, None)
             st.session_state.update(logged_out=True, clear_cookie=True)
             return None
         st.session_state.user = fresh
@@ -132,6 +136,7 @@ ctx = st.session_state.ctx
 pages = [st.Page(chat_page, title="Чат", icon=":material/forum:", default=True)]
 st.session_state.chat_page = pages[0]          # «Открыть в чате» из реестра ТКП переходит сюда
 if ctx["role"] in settings.tkp_roles:
+    pages.append(st.Page(trade_page, title="Подбор товаров", icon=":material/inventory_2:", url_path="trade"))
     pages.append(st.Page(registry_page, title="Реестр ТКП", icon=":material/request_quote:", url_path="tkp"))
 if ctx["is_admin"]:
     pages.append(st.Page(admin_page, title="Администрирование", icon=":material/admin_panel_settings:",
@@ -141,7 +146,7 @@ st.navigation(pages, position="sidebar" if len(pages) > 1 else "hidden").run()
 with st.sidebar:
     st.divider()
     st.markdown(f"**{ctx['name']}**  \n:gray[{ctx['role']}]")
-    if settings.auth_required:
+    if settings.auth_required and not directory_settings.enabled():
         with st.popover("Сменить пароль", icon=":material/key:"):
             password_form(ctx["login"], first=False)
     if settings.auth_required and st.button("Выйти", icon=":material/logout:", key="logout", type="tertiary"):
@@ -149,5 +154,8 @@ with st.sidebar:
         auth.end_session(st.session_state.get("token"))
         for k in ("user", "token", "conv", "ctx"):
             st.session_state.pop(k, None)
+        for k in list(st.session_state):
+            if str(k).startswith('trade'):
+                st.session_state.pop(k, None)
         st.session_state.update(logged_out=True, clear_cookie=True)
         st.rerun()
