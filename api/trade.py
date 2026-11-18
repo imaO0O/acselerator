@@ -23,7 +23,7 @@ from kbagent import trade_sources
 from kbagent.config import ROOT, settings
 from kbagent.trade_catalog import TradeCatalog
 from kbagent.trade_export import export_xlsx, proposal_docx
-from kbagent.trade_requests import match_batch
+from kbagent.trade_requests import check_stock, match_batch
 
 
 MAX_IMPORT_BYTES = 100 * 1024 * 1024
@@ -107,15 +107,7 @@ def _catalog():
 
 
 def _match(items, filters):
-    catalog = _catalog()
-
-    class FilteredCatalog:
-        def search(self, query):
-            return catalog.search(query, **filters)
-
-    # match_batch's first parameter is named catalog, so a catalog filter
-    # cannot also be supplied as a keyword. Bind search filters on this view.
-    return match_batch(FilteredCatalog(), items)
+    return match_batch(_catalog(), items, **filters)
 
 
 def _run(operation):
@@ -206,6 +198,7 @@ def build_router(client_dependency) -> APIRouter:
                 position["status"] = "exact" if exact else "analog"
                 if candidate.get("stock") is not None and candidate["stock"] < item.qty:
                     position["status"] = "out_of_stock"
+            check_stock(positions)
             exporter = export_xlsx if req.format == "xlsx" else proposal_docx
             data = exporter(positions, customer=req.customer, prices_include_vat=req.prices_include_vat)
             mime = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if req.format == "xlsx"

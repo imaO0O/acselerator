@@ -6,6 +6,9 @@ from zipfile import ZipFile
 
 import pytest
 from docx import Document
+from docx.enum.section import WD_ORIENT
+from docx.oxml.ns import qn
+from docx.shared import Mm
 from openpyxl import load_workbook
 
 from kbagent.trade_export import calculate, export_xlsx, proposal_docx
@@ -138,7 +141,8 @@ def test_xlsx_preserves_all_rows_unknowns_provenance_and_totals():
     book, sheet, values, start = sheet_values(export_xlsx(rows, customer="Покупатель"))
     headers = values[start]
     exported = [dict(zip(headers, row)) for row in values[start + 1:start + 4]]
-    assert [r["Статус"] for r in exported] == [r["status"] for r in rows]
+    assert [r["Статус"] for r in exported] == ["Точное совпадение", "Аналог подтверждён", "Недостаточно на складе"]
+    assert exported[0]["Включено в предложение"] == "Да"
     assert exported[0]["Количество"] == 2
     assert exported[0]["Артикул"] == "00123"
     assert exported[0]["Источник"] == rows[0]["selected"]["source"]
@@ -189,19 +193,57 @@ def test_docx_quantities_totals_all_rows_and_explicit_unknowns():
     assert "Цены указаны без НДС" in text
     assert "Итого предлагаемых строк — С НДС: Неизвестно" in text
     assert "Известная часть — С НДС (не полный итог): 360.00" in text
-    assert len(doc.tables) == 3
-    first = {r.cells[0].text: r.cells[1].text for r in doc.tables[0].rows}
-    assert first["Количество"] == "2.5"
-    assert first["Без НДС"] == "300.00" and first["НДС"] == "60.00"
-    assert first["С НДС"] == "360.00"
-    assert first["Источник"] == rows[0]["selected"]["source"]
-    assert first["Строка источника"] == "17"
-    last = {r.cells[0].text: r.cells[1].text for r in doc.tables[2].rows}
-    assert last["Цена за единицу"] == "Неизвестно"
-    assert last["НДС"] == "Неизвестно"
+    assert len(doc.tables) == 1
+    table = doc.tables[0]
+    assert len(table.rows) == 4 and len(table.columns) == 9
+    labels = [c.text for c in table.rows[0].cells]
+    first = dict(zip(labels, [c.text for c in table.rows[1].cells]))
+    assert first["Кол-во"] == "2.5"
+    assert first["Цена за ед.\nбез НДС"] == "120"
+    assert first["Сумма\nбез НДС"] == "300.00"
+    assert first["НДС\nставка / сумма"] == "20 %\n60.00"
+    assert first["Срок поставки"] == "4 недели" and first["Наличие"] == "0"
+    assert "Изделие" in first["Артикул / наименование"] and "Запрос 1" in first["Артикул / наименование"]
+    assert "[1]" in first["Артикул / наименование"]
+    assert f"[1] {rows[0]['selected']['source']}; строка источника: 17" in text
+    assert text.count("строка источника: 17") == 1  # repeated provenance is compact
+    assert table.rows[2].cells[8].text == "Требует проверки\nИсключено"
+    last = dict(zip(labels, [c.text for c in table.rows[3].cells]))
+    assert last["Цена за ед.\nбез НДС"] == "Неизвестно"
+    assert last["НДС\nставка / сумма"] == "Неизвестно\nНеизвестно"
     with ZipFile(io.BytesIO(data)) as archive:
         assert all(b'TargetMode="External"' not in archive.read(name)
                    for name in archive.namelist() if name.endswith(".rels"))
+
+
+def test_docx_100_positions_have_one_table_landscape_and_repeating_header():
+    doc = Document(io.BytesIO(proposal_docx([position(i) for i in range(1, 101)])))
+    assert len(doc.tables) == 1 and len(doc.tables[0].rows) == 101
+    assert doc.sections[0].orientation == WD_ORIENT.LANDSCAPE
+    assert doc.sections[0].page_width.mm == pytest.approx(297, abs=0.05)
+    assert doc.sections[0].page_height.mm == pytest.approx(210, abs=0.05)
+    assert doc.tables[0].rows[0]._tr.trPr.find(qn("w:tblHeader")) is not None
+    assert sum(c.width for c in doc.tables[0].columns) <= Mm(267) + Mm(0.1)
+    assert doc.tables[0].rows[100].cells[0].text == "100"
+    assert doc.tables[0].rows[1].cells[3].text == "120"
+    assert doc.tables[0].rows[1].cells[4].text == "240.00"
+
+
+def test_xlsx_wraps_long_names_queries_and_translates_all_statuses():
+    statuses = ["exact", "analog", "review", "out_of_stock", "not_found"]
+    rows = [position(i, status=s) for i, s in enumerate(statuses, 1)]
+    rows[0]["query"] = "Длинный запрос " * 25
+    rows[0]["selected"]["name"] = "Наименование с подробным описанием " * 15
+    _, sheet, values, start = sheet_values(export_xlsx(rows))
+    assert [values[start + i][2] for i in range(1, 6)] == [
+        "Точное совпадение", "Аналог подтверждён", "Требует проверки", "Недостаточно на складе", "Не найдено"]
+    assert calculate(rows)["rows"][0]["status"] == "exact"
+    assert calculate(rows)["rows"][0]["offered"] is True
+    for column in (2, 6, 16):
+        assert sheet.cell(start + 2, column).alignment.wrap_text
+    assert sheet.row_dimensions[start + 2].height > sheet.row_dimensions[start + 3].height
+    assert sheet.cell(start + 2, 2).value == rows[0]["query"]
+    assert sheet.cell(start + 2, 6).value == rows[0]["selected"]["name"]
 
 
 @pytest.mark.parametrize("exporter", [export_xlsx, proposal_docx])

@@ -115,7 +115,7 @@ def test_catalogs_search_filters_and_batch(api):
         {"query": "OLD-2", "qty": 1}]})
     assert response.status_code == 200, response.text
     result = response.json()
-    assert [r["status"] for r in result] == ["exact", "out_of_stock", "review"]
+    assert [r["status"] for r in result] == ["out_of_stock", "out_of_stock", "review"]
     assert result[0]["qty"] == 2.5
     assert result[2]["selected"] is None
     assert result[2]["candidates"][0]["article"] == "B-2"
@@ -270,14 +270,14 @@ def test_export_analog_confirmation_and_stock_are_enforced(api):
     values = list(load_workbook(io.BytesIO(base64.b64decode(response.json()["content_base64"]))).active.values)
     index = next(i for i, r in enumerate(values) if r[0] == "№")
     row = dict(zip(values[index], values[index + 1]))
-    assert row["Статус"] == "out_of_stock" and row["Включено в предложение"] == "Нет"
+    assert row["Статус"] == "Недостаточно на складе" and row["Включено в предложение"] == "Нет"
     assert next(r[7] for r in values if r[0] == "Итого предлагаемых строк — С НДС") == 0
     response = export(api, query="OLD-2", selected_id=hit["id"], confirm_analog=True)
     assert response.status_code == 200
     values = list(load_workbook(io.BytesIO(base64.b64decode(response.json()["content_base64"]))).active.values)
     index = next(i for i, r in enumerate(values) if r[0] == "№")
     row = dict(zip(values[index], values[index + 1]))
-    assert row["Статус"] == "analog" and row["Включено в предложение"] == "Да"
+    assert row["Статус"] == "Аналог подтверждён" and row["Включено в предложение"] == "Да"
     assert next(r[7] for r in values if r[0] == "Итого предлагаемых строк — С НДС") == 120
 
 
@@ -290,7 +290,7 @@ def test_export_respects_filters_and_no_choice_does_not_autoapprove_analog(api):
     response = export(api, query="OLD-2", confirm_analog=True)
     values = list(load_workbook(io.BytesIO(base64.b64decode(response.json()["content_base64"]))).active.values)
     index = next(i for i, r in enumerate(values) if r[0] == "№")
-    assert dict(zip(values[index], values[index + 1]))["Статус"] == "review"
+    assert dict(zip(values[index], values[index + 1]))["Статус"] == "Требует проверки"
 
 
 def test_docx_export_and_unknown_prices(api):
@@ -303,5 +303,36 @@ def test_docx_export_and_unknown_prices(api):
     assert ZipFile(io.BytesIO(data)).testzip() is None
     doc = Document(io.BytesIO(data))
     assert "ЧЕРНОВИК" in "\n".join(p.text for p in doc.paragraphs)
-    row = {r.cells[0].text: r.cells[1].text for r in doc.tables[0].rows}
-    assert row["Цена за единицу"] == "Неизвестно" and row["Включено в предложение"] == "Нет"
+    table = doc.tables[0]
+    row = dict(zip([c.text for c in table.rows[0].cells], [c.text for c in table.rows[1].cells]))
+    assert row["Цена за ед.\nбез НДС"] == "Неизвестно"
+    assert row["Статус"] == "Требует проверки\nИсключено"
+
+
+@pytest.mark.parametrize("format", ["xlsx", "docx"])
+@pytest.mark.parametrize("query,confirm", [("A-1", False), ("OLD-2", True)])
+def test_export_rechecks_aggregate_stock_after_manual_choices(api, format, query, confirm):
+    seed(api)
+    hit, = api.post("/trade/search", headers=headers(), json={"query": query}).json()
+    import sqlite3
+    with sqlite3.connect(trade.ROOT / "data" / "trade" / "catalog.sqlite") as db:
+        db.execute("UPDATE items SET stock='3' WHERE id=?", (hit["id"],))
+    response = api.post("/trade/export", headers=headers(), json={"format": format, "items": [
+        {"query": query, "qty": 2, "selected_id": hit["id"], "confirm_analog": confirm},
+        {"query": query, "qty": 2, "selected_id": hit["id"], "confirm_analog": confirm},
+    ]})
+    assert response.status_code == 200
+    data = base64.b64decode(response.json()["content_base64"])
+    if format == "xlsx":
+        values = list(load_workbook(io.BytesIO(data)).active.values)
+        index = next(i for i, r in enumerate(values) if r[0] == "№")
+        for values_row in values[index + 1:index + 3]:
+            row = dict(zip(values[index], values_row))
+            assert row["Статус"] == "Недостаточно на складе"
+            assert row["Включено в предложение"] == "Нет"
+        assert next(r[7] for r in values if r[0] == "Итого предлагаемых строк — С НДС") == 0
+    else:
+        doc = Document(io.BytesIO(data))
+        assert [r.cells[8].text for r in doc.tables[0].rows[1:]] == [
+            "Недостаточно на складе\nИсключено"] * 2
+        assert "Итого предлагаемых строк — С НДС: 0.00" in "\n".join(p.text for p in doc.paragraphs)
