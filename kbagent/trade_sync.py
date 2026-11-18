@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .trade_catalog import TradeCatalog
+from .trade_sources import archive
 
 
 def write_report(path: Path, report: dict) -> None:
@@ -122,6 +123,7 @@ def sync(config_path: Path, db_path: Path) -> dict:
                 row["result"] = result
                 if result.get("errors") or not result.get("imported"):
                     raise ValueError("import rejected: invalid rows or no valid rows")
+                row["source_sha256"] = archive(db_path.parent, data)
                 row.update(status="imported", last_success={"sha256": digest,
                            "import_id": result["import_id"], "time": report["time"]})
         except Exception as exc:  # isolate one export failure from the remaining sources

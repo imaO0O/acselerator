@@ -145,3 +145,29 @@ def test_report_publication_failure_keeps_previous_json(tmp_path, monkeypatch):
         trade_sync.write_report(report, {"ok": False})
     assert json.loads(report.read_text(encoding="utf-8")) == {"ok": True}
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_original_archived_after_success_only(tmp_path, monkeypatch):
+    from kbagent.trade_sources import read
+
+    source, config, db, _ = setup_source(tmp_path)
+    original = source.read_bytes()
+    calls = []
+    archive = trade_sync.archive
+
+    def archive_after_commit(root, data):
+        with closing(sqlite3.connect(db)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+        calls.append((root, data))
+        return archive(root, data)
+
+    monkeypatch.setattr(trade_sync, "archive", archive_after_commit)
+    report = trade_sync.sync(config, db)
+    digest = report["sources"][0]["source_sha256"]
+    assert digest == report["sources"][0]["sha256"]
+    assert read(db.parent, digest) == original
+    assert calls == [(db.parent, original)]
+    assert trade_sync.sync(config, db)["sources"][0]["status"] == "skipped"
+    source.write_text("Article;Name;Price;Stock\nA1;Part;invalid;4\n", encoding="utf-8")
+    assert not trade_sync.sync(config, db)["ok"]
+    assert calls == [(db.parent, original)]
