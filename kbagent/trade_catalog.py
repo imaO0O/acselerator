@@ -45,6 +45,8 @@ _MAX_ROWS = 500_000
 _MAX_CELL = 10_000
 _MAX_COLUMNS = 500
 _MAX_ERRORS = 100
+_REQUEST_WORDS = frozenset({"на", "для", "нужен", "нужна", "нужны", "нужно", "подбери",
+                            "подберите", "пожалуйста", "ищу", "требуется", "требуются", "мне"})
 
 
 class CatalogValidationError(ValueError):
@@ -73,6 +75,10 @@ def _text(value: object) -> str:
 
 def _norm(value: object) -> str:
     return " ".join(unicodedata.normalize("NFKC", _text(value)).casefold().split())
+
+
+def _words(value: object) -> set[str]:
+    return set(re.findall(r"\w+", _norm(value)))
 
 
 def decimal_value(value: object) -> Decimal | None:
@@ -353,8 +359,10 @@ class TradeCatalog:
                                        ((normalize_article(c), item_id, c) for c in crosses))
                         db.executemany("INSERT OR IGNORE INTO fitment VALUES(?,?,?)",
                                        ((kind, val, item_id) for kind, val in fitment))
+                        description = " ".join(values.get(key, "") for key in (
+                            "name", "applicability", "mark", "model", "year", "year_from", "year_to"))
                         db.executemany("INSERT OR IGNORE INTO name_terms VALUES(?,?)",
-                                       ((term, item_id) for term in set(re.findall(r"\w+", values["name"].casefold()))))
+                                       ((term, item_id) for term in _words(description)))
                         report["imported"] += 1
                     if report["rejected"]:
                         raise CatalogValidationError(report)
@@ -493,7 +501,32 @@ class TradeCatalog:
                     "JOIN imports p ON p.id=i.import_id WHERE " + condition + " AND " + where +
                     " ORDER BY i.id LIMIT ?", [*args, *params, size]).fetchall()
 
+            def descriptions():
+                terms = sorted(_words(query) - _REQUEST_WORDS)
+                if not terms or len(terms) > 24:
+                    return []
+                condition = " AND ".join(
+                    "i.id IN (SELECT item_id FROM name_terms WHERE term=?)" for _ in terms)
+                return fetch(condition, terms)
+
+            def unsupported_context(row):
+                tokens = query.split()[:24]
+                covered = set()
+                for start in range(len(tokens)):
+                    for end in range(start + 1, min(start + 6, len(tokens)) + 1):
+                        if normalize_article(" ".join(tokens[start:end])) == row["article_norm"]:
+                            covered.update(range(start, end))
+                remaining = _words(" ".join(word for i, word in enumerate(tokens) if i not in covered)) - _REQUEST_WORDS
+                if not remaining:
+                    return False
+                placeholders = ",".join("?" for _ in remaining)
+                known = {r[0] for r in db.execute(
+                    "SELECT term FROM name_terms WHERE item_id=? AND term IN (" + placeholders + ")",
+                    [row["id"], *sorted(remaining)])}
+                return bool(remaining - known)
+
             hits = fetch("i.article_norm=?", [norm])
+            extracted = not hits
             # Batch requests may concatenate the article and product name. Look
             # up bounded contiguous token spans through the same exact index;
             # never label a fuzzy token as an exact article.
@@ -518,18 +551,18 @@ class TradeCatalog:
             crosses = fetch(cross_condition, [*candidates, *candidates, _norm(price_level)])
             if hits or crosses:
                 exact_ids = {row["id"] for row in hits}
-                results = [self._result(row, "exact", len(hits) > 1, _norm(price_level), reduction)
+                context_review = {row["id"]: extracted and unsupported_context(row) for row in hits}
+                results = [self._result(row, "exact", len(hits) > 1 or context_review[row["id"]], _norm(price_level), reduction)
                            for row in hits[:limit]]
                 results.extend(self._result(row, "cross", True, _norm(price_level), reduction)
                                for row in crosses if row["id"] not in exact_ids)
+                if any(context_review.values()) and len(results) < limit:
+                    seen = {row["id"] for row in results}
+                    results.extend(self._result(row, "description", True, _norm(price_level), reduction)
+                                   for row in descriptions() if row["id"] not in seen)
                 return results[:limit]
             if not hits:
-                terms = list(dict.fromkeys(re.findall(r"\w+", _norm(query))))[:12]
-                if terms:
-                    # Intersect explicit description words using the term index.
-                    condition = " AND ".join(
-                        "i.id IN (SELECT item_id FROM name_terms WHERE term=?)" for _ in terms)
-                    hits = fetch(condition, terms)
+                hits = descriptions()
                 match_type = "description"
             if not hits and len(norm) >= 3:
                 pool = {}

@@ -222,6 +222,36 @@ def test_description_and_typo_candidates_never_approved(catalog):
         assert hit["applicability"] == ""
 
 
+@pytest.mark.parametrize("query", ["масляный фильтр на ДЕМО-Т82", "нужен масляный фильтр для ДЕМО-Т82",
+                                        "нужны масляный фильтр на ДЕМО-Т82", "подбери масляный фильтр для ДЕМО-Т82"])
+def test_description_indexes_only_explicit_applicability_and_model(catalog, query):
+    add(catalog, [["FILTER100", "Масляный фильтр", 10, "ДЕМО-Т82", ""],
+                  ["FILTER200", "Масляный фильтр", 12, "", "ДЕМО-Т82"],
+                  ["FILTER300", "Масляный фильтр", 13, "ДЕМО-Т90", ""],
+                  ["FILTER400", "Масляный фильтр", 14, "", ""]],
+        ["article", "name", "price", "model", "applicability"])
+    hits = catalog.search(query)
+    assert {hit["article"] for hit in hits} == {"FILTER100", "FILTER200"}
+    assert all(hit["match_type"] == "description" and hit["needs_review"] for hit in hits)
+    assert catalog.search("нужен подбери для на") == []
+
+
+def test_extracted_article_with_unsupported_context_requires_review(catalog):
+    add(catalog, [["AB123", "Oil pump", 10]])
+    hit, = catalog.search("AB123 Oil pump for unsupported vehicle")
+    assert hit["match_type"] == "exact" and hit["needs_review"]
+
+
+def test_equipment_article_in_description_does_not_approve_equipment_as_part(catalog):
+    add(catalog, [["ДЕМО-Т82", "Трактор", 100, ""],
+                  ["FILTER100", "Масляный фильтр", 10, "ДЕМО-Т82"]],
+        ["article", "name", "price", "model"])
+    hits = catalog.search("масляный фильтр на ДЕМО-Т82")
+    assert [(hit["article"], hit["match_type"]) for hit in hits] == [
+        ("ДЕМО-Т82", "exact"), ("FILTER100", "description")]
+    assert all(hit["needs_review"] for hit in hits)
+
+
 def test_explicit_applicability_no_vin_inference(catalog):
     headers = ["article", "name", "price", "mark", "model", "year_from", "year_to", "vin", "applicability"]
     vin = "WVWZZZ1JZXW000001"
@@ -331,6 +361,29 @@ def test_out_of_stock_batch_has_reviewed_explicit_cross_candidates(catalog):
     hit, = catalog.search("ORIG100", available_only=True)
     assert hit["article"] == "ALT100" and hit["match_type"] == "cross" and hit["needs_review"]
     assert all(r["article"] != "THIRD100" for r in result["candidates"])
+
+
+def test_symmetric_one_hop_crosses_respect_catalog_and_brand_filters(catalog):
+    headers = ["article", "name", "price", "stock", "cross_numbers", "brand"]
+    add(catalog, [["A100", "Pump", 10, 0, "B100", "Original"],
+                  ["B100", "Pump", 12, 5, "", "Replacement"],
+                  ["C100", "Pump", 13, 5, "B100", "Third"]], headers)
+    add(catalog, [["B100", "Other catalog pump", 99, 5, "", "Replacement"]],
+        headers, catalog="Other")
+    forward = catalog.search("A100", catalog="Основной")
+    assert [(r["article"], r["match_type"]) for r in forward] == [
+        ("A100", "exact"), ("B100", "cross")]
+    assert forward[0]["stock"] == 0 and forward[1]["stock"] == 5
+    assert forward[1]["needs_review"]
+    reverse = catalog.search("B100", catalog="Основной")
+    assert [(r["article"], r["match_type"]) for r in reverse] == [
+        ("B100", "exact"), ("A100", "cross"), ("C100", "cross")]
+    assert all(r["needs_review"] for r in reverse[1:])
+    hit, = catalog.search("A100", catalog="Основной", brand="Replacement", available_only=True)
+    assert hit["article"] == "B100" and hit["price"] == 12 and hit["match_type"] == "cross"
+    hit, = catalog.search("B100", catalog="Основной", brand="Original")
+    assert hit["article"] == "A100" and hit["match_type"] == "cross"
+    assert catalog.search("A100", catalog="Основной", brand="Third") == []
 
 
 @pytest.mark.parametrize("kwargs", [{"limit": 0}, {"limit": True}, {"limit": 1.5},
