@@ -10,7 +10,10 @@
 документов (scripts/sync_folder.py). Поэтому изменение идёт под блокировкой index_dir/.lock: перечитать то,
 что записал другой процесс, изменить, записать. Файлы пишутся во временные и подменяются целиком, meta.json —
 последним; чат перед ответом перечитывает индекс, если meta.json изменился (reload_if_changed).
+При KB_INDEX_KEY_FILE фрагменты и векторы публикуются одним зашифрованным index.enc;
+для него reload_if_changed отслеживает сам blob, а meta.json содержит только публичные сведения.
 """
+import hashlib
 import json
 import math
 import os
@@ -21,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import llm
+from . import index_crypto, llm
 from .ingest import Chunk, parse_corpus, parse_document
 from .text import word_tokens
 
@@ -84,7 +87,12 @@ def _lock(index_dir: Path):
 
 
 def disk_stamp(index_dir: Path) -> int | None:
-    """Метка версии индекса на диске — время записи meta.json (пишется последним)."""
+    """Encrypted blob is the commit point; legacy indexes use meta.json."""
+    if index_crypto.status(index_dir)["enabled"]:
+        try:
+            return (index_dir / index_crypto.BLOB_NAME).stat().st_mtime_ns
+        except FileNotFoundError:
+            return None
     try:
         return (index_dir / "meta.json").stat().st_mtime_ns
     except FileNotFoundError:
@@ -98,6 +106,7 @@ class Index:
         self.bm25 = BM25([word_tokens(c.search_text) for c in chunks])
         self.access = np.array([c.access for c in chunks])
         self.stamp: int | None = None          # версия индекса на диске, с которой совпадает эта копия
+        self._crypto_key_tag: bytes | None = None
 
     # ---------- построение и загрузка ----------
 
@@ -114,7 +123,38 @@ class Index:
 
     def save(self, index_dir: Path) -> None:
         """Файлы пишутся во временные и подменяются целиком: читающий процесс не увидит половину записи."""
+        with _lock(index_dir):
+            self._save_unlocked(index_dir)
+
+    def _save_unlocked(self, index_dir: Path, *, migration_key: bytes | None = None) -> None:
+        """Caller holds _lock; migration_key is only for explicit plaintext migration."""
         index_dir.mkdir(parents=True, exist_ok=True)
+        if index_crypto.status(index_dir)["enabled"] or self._crypto_key_tag is not None or migration_key is not None:
+            key = migration_key if migration_key is not None else index_crypto.read_key(index_dir)
+            blob_path = index_dir / index_crypto.BLOB_NAME
+            if blob_path.exists():
+                # Refuse overwriting an existing encrypted index with a wrong key.
+                index_crypto.unseal(blob_path.read_bytes(), key)
+            elif migration_key is None:
+                if index_crypto.status(index_dir)["encryption"] or self._crypto_key_tag is not None:
+                    raise index_crypto.IndexCryptoError("Encrypted index blob is missing")
+                if any((index_dir / name).exists() for name in ("chunks.jsonl", "vectors.npy")):
+                    raise index_crypto.IndexCryptoError("Plaintext index requires explicit scripts/encrypt_index.py migration")
+            blob = index_crypto.seal([c.to_dict() for c in self.chunks], self.vectors, key)
+            index_crypto.unseal(blob, key)   # Verify before publishing or deleting legacy files.
+            index_crypto.atomic_write(blob_path, blob)
+            index_crypto.unseal(blob_path.read_bytes(), key)
+            meta = {"chunks": len(self.chunks), "built": time.strftime("%Y-%m-%d %H:%M"), "encryption": True}
+            index_crypto.atomic_write(index_dir / "meta.json", json.dumps(meta).encode("utf-8"))
+            for name in ("chunks.jsonl", "vectors.npy"):
+                (index_dir / name).unlink(missing_ok=True)
+            # Stale temporary files from earlier plaintext saves also contain index data.
+            for pattern in ("chunks.jsonl.*.tmp", "vectors.*.tmp.npy", "meta.json.*.tmp"):
+                for path in index_dir.glob(pattern):
+                    path.unlink()
+            self._crypto_key_tag = hashlib.sha256(key).digest()
+            self.stamp = disk_stamp(index_dir)
+            return
         tmp = index_dir / f"chunks.jsonl.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             for c in self.chunks:
@@ -138,16 +178,28 @@ class Index:
     def reload_if_changed(self, index_dir: Path) -> bool:
         """Индекс на диске изменил другой процесс (обработка папки, второй экземпляр чата) — перечитать."""
         stamp = disk_stamp(index_dir)
-        if self.stamp is None or stamp is None or stamp == self.stamp:
+        encrypted = index_crypto.status(index_dir)["enabled"] or self._crypto_key_tag is not None
+        if encrypted:
+            key_tag = hashlib.sha256(index_crypto.read_key(index_dir)).digest()
+            if (self.stamp is None and stamp is None and self._crypto_key_tag is None
+                    and not index_crypto.status(index_dir)["encryption"]
+                    and not any((index_dir / name).exists() for name in ("chunks.jsonl", "vectors.npy"))):
+                return False                   # fresh index in memory, no disk index to reload yet
+            if stamp is not None and stamp == self.stamp and key_tag == self._crypto_key_tag:
+                return False
+            fresh = Index.load(index_dir)    # Crypto errors must propagate, never serve stale plaintext.
+        elif self.stamp is None or stamp is None or stamp == self.stamp:
             return False                       # индекс собран в памяти (тесты) или на диске не менялся
-        try:
-            fresh = Index.load(index_dir)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return False                       # файлы недоступны или повреждены — в следующий раз
+        else:
+            try:
+                fresh = Index.load(index_dir)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                return False                       # файлы недоступны или повреждены — в следующий раз
         if len(fresh.chunks) != len(fresh.vectors):
             return False
         self.chunks, self.vectors, self.bm25, self.access = fresh.chunks, fresh.vectors, fresh.bm25, fresh.access
         self.stamp = fresh.stamp
+        self._crypto_key_tag = fresh._crypto_key_tag
         return True
 
     @contextmanager
@@ -156,7 +208,7 @@ class Index:
         with _lock(index_dir):
             self.reload_if_changed(index_dir)
             yield
-            self.save(index_dir)
+            self._save_unlocked(index_dir)
 
     def _drop(self, doc_id: str) -> int:
         keep = [i for i, c in enumerate(self.chunks) if c.doc_id != doc_id]
@@ -214,6 +266,16 @@ class Index:
     @classmethod
     def load(cls, index_dir: Path) -> "Index":
         stamp = disk_stamp(index_dir)
+        if index_crypto.status(index_dir)["enabled"]:
+            key = index_crypto.read_key(index_dir)
+            try:
+                chunks, vectors = index_crypto.unseal((index_dir / index_crypto.BLOB_NAME).read_bytes(), key)
+                index = cls([Chunk(**c) for c in chunks], vectors)
+            except (OSError, TypeError, ValueError) as exc:
+                raise index_crypto.IndexCryptoError("Cannot load encrypted index; plaintext fallback is forbidden") from exc
+            index._crypto_key_tag = hashlib.sha256(key).digest()
+            index.stamp = stamp
+            return index
         with open(index_dir / "chunks.jsonl", encoding="utf-8") as f:
             chunks = [Chunk(**json.loads(line)) for line in f]
         index = cls(chunks, np.load(index_dir / "vectors.npy"))
